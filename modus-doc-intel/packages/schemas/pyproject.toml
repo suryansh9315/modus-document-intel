@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "modus-schemas"
+version = "0.1.0"
+description = "Shared Pydantic models for modus-doc-intel"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "python-ulid>=2.2",
+    "typing-extensions>=4.11",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/modus_schemas"]

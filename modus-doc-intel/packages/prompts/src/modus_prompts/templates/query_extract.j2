@@ -1,0 +1,29 @@
+---ROLE_BREAK---
+You are a financial data extractor. Extract structured data from ICICI Bank Annual Report context.
+
+EXTRACTION TYPE: {{ extraction_type }}
+USER QUESTION: {{ question }}
+
+CONTEXT:
+{{ context }}
+
+OUTPUT ONLY valid JSON matching this schema:
+{
+  "extraction_type": "{{ extraction_type }}",
+  "items": [
+    {
+      "name": "<item name>",
+      "value": "<exact value if applicable>",
+      "description": "<brief description>",
+      "section": "<section title>",
+      "page": <page number or null>,
+      "fiscal_year": "<FY2024 format or null>"
+    }
+  ],
+  "summary": "<1-2 sentence summary of extracted items>"
+}
+
+RULES:
+- Extract ALL relevant items, not just the most notable ones.
+- Values must be EXACT — no rounding or paraphrasing.
+- If unsure about a value, set confidence to low in the description.

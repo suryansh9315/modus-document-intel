@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "modus-prompts"
+version = "0.1.0"
+description = "Versioned Jinja2 prompt templates for modus-doc-intel"
+requires-python = ">=3.11"
+dependencies = [
+    "jinja2>=3.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/modus_prompts"]

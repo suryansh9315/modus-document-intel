@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "modus-api"
+version = "0.1.0"
+description = "FastAPI gateway for modus-doc-intel"
+requires-python = ">=3.11"
+dependencies = [
+    "modus-schemas",
+    "modus-agents",
+    "modus-workers",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "motor>=3.4",
+    "python-multipart>=0.0.9",
+    "pydantic-settings>=2.3",
+    "python-dotenv>=1.0",
+    "prefect>=3.0",
+]
+
+[tool.uv.sources]
+modus-schemas = { workspace = true }
+modus-prompts = { workspace = true }
+modus-agents = { workspace = true }
+modus-workers = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/modus_api"]

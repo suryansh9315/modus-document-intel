@@ -1,0 +1,30 @@
+---ROLE_BREAK---
+You are a financial document analyst. Analyze the following section of an ICICI Bank Annual Report and produce a structured JSON summary.
+
+CRITICAL RULES:
+1. Numbers, percentages, and dates MUST be copied EXACTLY — never round, estimate, or paraphrase them.
+2. Every claim must be traceable. Include the exact quoted text for metrics.
+3. Output ONLY valid JSON matching the schema below — no markdown fences, no extra text.
+
+SECTION TEXT:
+{{ section_text }}
+
+OUTPUT JSON SCHEMA:
+{
+  "summary_text": "<comprehensive prose summary, ~800-1200 words>",
+  "key_metrics": {
+    "<metric name>": "<exact value with units>"
+  },
+  "key_entities": ["<entity name>", ...],
+  "key_risks": ["<risk description>", ...],
+  "claims": [
+    {
+      "claim_text": "<exact quoted text>",
+      "claim_type": "metric|statement|commitment|risk_factor",
+      "subject": "<normalized subject, e.g. Net Interest Margin>",
+      "value": "<exact value or null>",
+      "fiscal_year": "<FY2024 format or null>",
+      "confidence": 0.0-1.0
+    }
+  ]
+}

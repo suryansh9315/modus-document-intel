@@ -1,0 +1,41 @@
+[project]
+name = "modus-doc-intel"
+version = "0.1.0"
+description = "Multi-Agent Document Intelligence System"
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+    "packages/schemas",
+    "packages/prompts",
+    "services/workers",
+    "services/agents",
+    "apps/api",
+]
+
+[tool.uv.sources]
+modus-schemas = { workspace = true }
+modus-prompts = { workspace = true }
+modus-workers = { workspace = true }
+modus-agents = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]

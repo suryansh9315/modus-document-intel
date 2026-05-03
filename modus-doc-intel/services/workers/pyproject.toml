@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "modus-workers"
+version = "0.1.0"
+description = "Prefect ingestion flows for modus-doc-intel"
+requires-python = ">=3.11"
+dependencies = [
+    "modus-schemas",
+    "modus-prompts",
+    "prefect>=3.0",
+    "pdfplumber>=0.11",
+    "python-doctr>=0.9",
+    "duckdb>=1.0",
+    "motor>=3.4",          # async MongoDB driver
+    "httpx>=0.27",
+    "tiktoken>=0.7",
+    "jinja2>=3.1",
+    "python-dotenv>=1.0",
+    "asyncio-throttle>=1.0",
+]
+
+[tool.uv.sources]
+modus-schemas = { workspace = true }
+modus-prompts = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/modus_workers"]

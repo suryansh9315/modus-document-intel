@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+# Install system deps for docTR + torch
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 libsm6 libxext6 libxrender-dev libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install uv
+RUN pip install --no-cache-dir uv
+
+# Copy workspace files (no lockfile required)
+COPY pyproject.toml ./
+COPY packages/ packages/
+COPY services/ services/
+
+# Install the workers package and all its workspace dependencies
+RUN uv sync --package modus-workers --no-dev
+
+# Create data directory
+RUN mkdir -p /data
+
+CMD ["uv", "run", "--package", "modus-workers", "python", "-m", "modus_workers"]

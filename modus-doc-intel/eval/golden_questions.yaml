@@ -1,0 +1,235 @@
+# Golden Q&A pairs for evaluating the modus-doc-intel system
+# against the ICICI Bank Annual Report.
+#
+# Format:
+#   query_type: one of the 7 QueryType values
+#   question: the user question
+#   expected_keywords: list of terms that MUST appear in the answer
+#   section_ids: optional list of section IDs (filled in after ingestion)
+#   notes: grading notes for human review
+
+golden_questions:
+  # ─────────────────────────────────────────────────────────────────
+  # SUMMARIZE_FULL — 4 questions
+  # ─────────────────────────────────────────────────────────────────
+  - id: gq001
+    query_type: SUMMARIZE_FULL
+    question: "Provide a comprehensive executive summary of the ICICI Bank Annual Report."
+    expected_keywords:
+      - ICICI Bank
+      - net interest margin
+      - capital adequacy
+      - NPA
+      - profit
+    notes: "Should cover overall financial performance, key metrics, and strategic highlights."
+
+  - id: gq002
+    query_type: SUMMARIZE_FULL
+    question: "What are the major strategic priorities and business segments of ICICI Bank?"
+    expected_keywords:
+      - retail
+      - corporate
+      - SME
+      - digital
+      - growth
+    notes: "Should identify retail banking, corporate banking, international, and digital strategy."
+
+  - id: gq003
+    query_type: SUMMARIZE_FULL
+    question: "How did ICICI Bank perform financially in FY2024 compared to FY2023?"
+    expected_keywords:
+      - profit
+      - NII
+      - ROA
+      - ROE
+      - loan
+    notes: "Should include year-over-year comparison of key financial metrics."
+
+  - id: gq004
+    query_type: SUMMARIZE_FULL
+    question: "What is the overall risk profile of ICICI Bank as described in the annual report?"
+    expected_keywords:
+      - credit risk
+      - market risk
+      - operational risk
+      - NPA
+      - provisioning
+    notes: "Should cover all major risk categories and mitigation measures."
+
+  # ─────────────────────────────────────────────────────────────────
+  # SUMMARIZE_SECTION — 4 questions
+  # ─────────────────────────────────────────────────────────────────
+  - id: gq005
+    query_type: SUMMARIZE_SECTION
+    question: "Summarize the Risk Management section of the annual report."
+    expected_keywords:
+      - risk
+      - credit
+      - liquidity
+      - capital
+    notes: "Should reflect the dedicated risk management disclosure section."
+
+  - id: gq006
+    query_type: SUMMARIZE_SECTION
+    question: "What does the Corporate Governance section say about board composition?"
+    expected_keywords:
+      - board
+      - directors
+      - independent
+      - committee
+    notes: "Should cover board structure, independence, and committee details."
+
+  - id: gq007
+    query_type: SUMMARIZE_SECTION
+    question: "Summarize the financial highlights section."
+    expected_keywords:
+      - profit
+      - income
+      - assets
+      - deposits
+    notes: "Should include top-level financial metrics from the highlights page."
+
+  - id: gq008
+    query_type: SUMMARIZE_SECTION
+    question: "What does the Chairman's or MD's message say about the bank's future strategy?"
+    expected_keywords:
+      - strategy
+      - growth
+      - digital
+      - customer
+    notes: "Should reflect the leadership message narrative."
+
+  # ─────────────────────────────────────────────────────────────────
+  # CROSS_SECTION_COMPARE — 3 questions
+  # ─────────────────────────────────────────────────────────────────
+  - id: gq009
+    query_type: CROSS_SECTION_COMPARE
+    question: "Compare what the Risk Management section and the Financial Statements say about Non-Performing Assets (NPA)."
+    expected_keywords:
+      - NPA
+      - gross NPA
+      - net NPA
+      - provisioning
+    notes: "Should identify consistent or contradicting NPA figures across sections."
+
+  - id: gq010
+    query_type: CROSS_SECTION_COMPARE
+    question: "How does the Capital Adequacy section compare with what the Financial Highlights state about CRAR?"
+    expected_keywords:
+      - CRAR
+      - capital
+      - Tier 1
+      - adequacy
+    notes: "Should identify the CRAR figure mentioned in both sections."
+
+  - id: gq011
+    query_type: CROSS_SECTION_COMPARE
+    question: "Compare ICICI Bank's retail banking strategy as described in the MD&A versus the business overview section."
+    expected_keywords:
+      - retail
+      - digital
+      - customer
+      - growth
+    notes: "Should highlight strategic alignment or differences between sections."
+
+  # ─────────────────────────────────────────────────────────────────
+  # EXTRACT_ENTITIES — 2 questions
+  # ─────────────────────────────────────────────────────────────────
+  - id: gq012
+    query_type: EXTRACT_ENTITIES
+    question: "Extract all key financial metrics mentioned in the report with their exact values."
+    expected_keywords:
+      - net interest margin
+      - ROA
+      - ROE
+      - capital adequacy
+    notes: "Should produce a structured list of metrics with exact values."
+
+  - id: gq013
+    query_type: EXTRACT_ENTITIES
+    question: "List all subsidiaries and associates of ICICI Bank mentioned in the annual report."
+    expected_keywords:
+      - ICICI Lombard
+      - ICICI Prudential
+      - ICICI Securities
+    notes: "Should identify major group entities."
+
+  # ─────────────────────────────────────────────────────────────────
+  # EXTRACT_RISKS — 2 questions
+  # ─────────────────────────────────────────────────────────────────
+  - id: gq014
+    query_type: EXTRACT_RISKS
+    question: "What are the top risk factors disclosed by ICICI Bank in this annual report?"
+    expected_keywords:
+      - credit risk
+      - market risk
+      - liquidity
+      - operational
+      - regulatory
+    notes: "Should list major risk categories with descriptions."
+
+  - id: gq015
+    query_type: EXTRACT_RISKS
+    question: "Extract all macroeconomic risks mentioned in the report."
+    expected_keywords:
+      - inflation
+      - GDP
+      - interest rate
+      - geopolitical
+    notes: "Should identify external/macro risk factors."
+
+  # ─────────────────────────────────────────────────────────────────
+  # EXTRACT_DECISIONS — 2 questions
+  # ─────────────────────────────────────────────────────────────────
+  - id: gq016
+    query_type: EXTRACT_DECISIONS
+    question: "What major strategic decisions or commitments did ICICI Bank announce?"
+    expected_keywords:
+      - digital
+      - expansion
+      - investment
+      - commitment
+    notes: "Should identify forward-looking decisions and commitments."
+
+  - id: gq017
+    query_type: EXTRACT_DECISIONS
+    question: "What dividend and capital allocation decisions were made by the board?"
+    expected_keywords:
+      - dividend
+      - equity
+      - capital
+      - shareholders
+    notes: "Should include dividend per share and capital allocation decisions."
+
+  # ─────────────────────────────────────────────────────────────────
+  # DETECT_CONTRADICTIONS — 3 questions
+  # ─────────────────────────────────────────────────────────────────
+  - id: gq018
+    query_type: DETECT_CONTRADICTIONS
+    question: "Are there any contradictions or inconsistencies in the NPA figures reported across different sections?"
+    expected_keywords:
+      - NPA
+      - gross
+      - net
+      - provision
+    notes: "Should identify if NPA figures differ between sections and explain why."
+
+  - id: gq019
+    query_type: DETECT_CONTRADICTIONS
+    question: "Do the stated capital adequacy ratios match consistently across all sections of the report?"
+    expected_keywords:
+      - CRAR
+      - Tier 1
+      - capital
+      - Basel
+    notes: "Should cross-verify capital ratios mentioned in multiple sections."
+
+  - id: gq020
+    query_type: DETECT_CONTRADICTIONS
+    question: "Are there any contradictions in the revenue or profit figures mentioned in different parts of the report?"
+    expected_keywords:
+      - profit
+      - revenue
+      - income
+      - loss
+    notes: "Should identify profit/revenue figure discrepancies if any."

@@ -1,0 +1,62 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+.eggs/
+*.so
+
+# uv
+.uv/
+uv.lock
+
+# Data (never commit PDFs or database files)
+/data/
+*.pdf
+*.duckdb
+*.db
+
+# Logs
+*.log
+logs/
+
+# Node.js / Next.js
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.xml
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Eval results (keep golden questions but not run outputs)
+eval/results_*.json
+
+# Prefect
+.prefect/

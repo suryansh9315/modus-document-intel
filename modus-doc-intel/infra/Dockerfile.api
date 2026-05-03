@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install uv
+RUN pip install --no-cache-dir uv
+
+# Copy workspace files (no lockfile required)
+COPY pyproject.toml ./
+COPY packages/ packages/
+COPY services/ services/
+COPY apps/api/ apps/api/
+
+# Install the API package and all its workspace dependencies
+RUN uv sync --package modus-api --no-dev
+
+# Create data directory
+RUN mkdir -p /data/uploads
+
+EXPOSE 8000
+
+CMD ["uv", "run", "--package", "modus-api", "uvicorn", "modus_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

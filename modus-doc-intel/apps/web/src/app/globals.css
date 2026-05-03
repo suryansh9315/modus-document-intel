@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --brand: #4f6ef7;
+  }
+}
+
+/* Smooth streaming text */
+.answer-text {
+  line-height: 1.7;
+}
+
+.answer-text h2 {
+  @apply text-lg font-semibold mt-6 mb-2;
+}
+
+.answer-text h3 {
+  @apply text-base font-semibold mt-4 mb-1;
+}
+
+.answer-text ul {
+  @apply list-disc list-inside space-y-1 ml-2;
+}
+
+.answer-text p {
+  @apply mb-3;
+}
+
+.answer-text code {
+  @apply bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono;
+}
+
+.answer-text strong {
+  @apply font-semibold;
+}
