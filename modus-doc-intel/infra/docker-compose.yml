@@ -9,7 +9,6 @@ services:
     env_file:
       - ../.env
     environment:
-      MONGO_URI: ${MONGO_URI}           # Atlas connection string from .env
       DUCKDB_PATH: /data/modus.duckdb
       UPLOAD_DIR: /data/uploads
     volumes:
