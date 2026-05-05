@@ -2,8 +2,8 @@
 
 ## The Core Problem
 
-A large scanned document (500+ pages) expands to well over 128K tokens when OCR'd.
-Llama-3.3-70B has a 128K context window — the raw document cannot fit in a single call.
+A large scanned document (500+ pages) expands to well over 100K tokens when OCR'd.
+The raw document cannot fit in a single LLM call at query time.
 
 Example: the ICICI Bank Annual Report (341 pages) ≈ **248K tokens** raw.
 
@@ -38,26 +38,26 @@ The compression ratios scale proportionally for larger or smaller documents.
 |---|---|---|
 | **Retention** of exact numbers | Medium (chunk may miss context) | High (explicit key_metrics dict) |
 | **Cross-section reasoning** | Low (chunks are isolated) | High (L2/L3 cross-section themes) |
-| **Latency** at query time | ~2–5s (embedding lookup) | ~3–8s (context assembly) |
+| **Latency** at query time | ~2–5s (embedding lookup) | ~5–30s (context assembly + Groq) |
 | **Hallucination risk** | Medium (chunk may be misleading) | Low (numbers pass verbatim) |
 | **Infrastructure** | Vector DB + embedding model | MongoDB + DuckDB (simpler) |
 | **Freshness** | Instant re-indexing | Requires re-ingestion |
 
-## Context Budget (Worst Case)
+## Context Budget
 
-At query time, the aggregation node assembles:
+At query time, the aggregation node assembles context within a **22K token budget**,
+driven by Groq llama-4-scout's 30K TPM rate limit (22K input + ~8K output headroom).
 
-| Layer | Content | Tokens |
+| Layer | Content | Approx tokens |
 |---|---|---|
-| L3 global digest | digest_text + executive_summary + top_metrics + top_risks | ~3,500 |
-| L2 cluster digests (up to 40% of budget) | Cross-section themes + consolidated_metrics | ~12,000 |
-| L1 section summaries (remaining budget) | Per-section details (density-sorted for EXTRACT_*) | ~1,500 |
-| System prompt + templates | Instructions | ~2,000 |
-| Conversation history | Prior turns | ~5,000 |
-| **Total** | | **~24,000** |
+| L3 global digest | digest_text + executive_summary + top_metrics + top_risks | ~1,500 |
+| L2 cluster digests (up to 40% of budget = 8,800 tokens) | Cross-section themes + consolidated_metrics | ~5,000–8,800 |
+| L1 section summaries (remaining budget up to 85% cap) | Per-section details (density-sorted for EXTRACT_*) | ~5,000–12,000 |
+| System prompt + templates | Instructions | ~300 |
+| **Total** | | **≤ 22,000** |
 
-**Headroom:** 120,000 − 24,000 = **96,000 tokens remaining** for answer generation.
-This is well within the 128K context limit (using 120K as safety budget).
+**Why 22K?** Groq llama-4-scout has a 30K tokens-per-minute (TPM) limit. Capping input at
+~22K tokens leaves ~8K for output within a single TPM window, preventing rate-limit throttling.
 
 ## Query-Type-Aware Context Assembly
 
@@ -65,13 +65,26 @@ The aggregation node tailors which context is loaded based on the query type:
 
 | Query Type | L1 section selection | Additional context |
 |---|---|---|
-| `SUMMARIZE_FULL` | Skipped (L3+L2 sufficient) | All L1 `key_metrics` aggregated into a "Key Metrics (All Sections)" block |
+| `SUMMARIZE_FULL` | All sections within budget (density order) | L3 top_metrics + top_risks prominently placed |
 | `SUMMARIZE_SECTION` | Requested sections + up to 4 neighbors within ±20 pages | — |
 | `EXTRACT_ENTITIES` | All sections, sorted by `key_metrics` count descending | DuckDB `metric` claims prepended as seed candidates |
 | `EXTRACT_RISKS` | All sections, sorted by `key_risks` count descending | DuckDB `risk_factor` claims prepended as seed candidates |
 | `EXTRACT_DECISIONS` | All sections, sorted by `commitment` claim count descending | DuckDB `commitment` claims prepended as seed candidates |
-| `DETECT_CONTRADICTIONS` | Relevant sections | DuckDB contradiction candidates re-sorted by question-keyword relevance before top-20 cap |
+| `DETECT_CONTRADICTIONS` | Relevant sections (context[:3000]) | DuckDB contradiction candidates re-sorted by question-keyword relevance before top-20 cap |
 | `CROSS_SECTION_COMPARE` | Explicitly requested section IDs | — |
+
+## LLM Routing at Query Time
+
+Each query type makes exactly **1 LLM call** — the branch node produces the final answer directly.
+The query node is a full passthrough with no additional LLM call.
+
+| Query Type | Model | Provider | Approx tokens/call |
+|---|---|---|---|
+| EXTRACT_* | llama-4-scout | Groq | ~22K in + 3K out |
+| SUMMARIZE_FULL | llama-4-scout | Groq | ~18K in + 4K out |
+| SUMMARIZE_SECTION | llama-4-scout | Groq | ~8K in + 3K out |
+| CROSS_SECTION_COMPARE | llama-4-scout | Groq | ~6K in + 3K out |
+| DETECT_CONTRADICTIONS | llama3.1-8b | Cerebras | ~4K in + 2K out |
 
 ## Invariants (Never Violated)
 
@@ -95,7 +108,7 @@ The aggregation node tailors which context is loaded based on the query type:
 5. **Contradiction detection uses normalized subjects.** `ExtractedClaim.subject`
    is stored in DuckDB and normalized to lowercase for matching. Candidate pairs
    share the same `doc_id` and `subject` but have differing `value` fields —
-   Llama-70B then classifies whether the difference is a genuine inconsistency
+   `llama3.1-8b` then classifies whether the difference is a genuine inconsistency
    or an explainable variation (different sections, methodologies, etc.).
 
 6. **DuckDB claims are dual-use.** The `claims` table serves both contradiction detection
@@ -105,9 +118,8 @@ The aggregation node tailors which context is loaded based on the query type:
 
 7. **Structured fields on L2/L3 are always captured.** The L2 prompt returns
    `consolidated_metrics` and the L3 prompt returns `top_metrics`/`top_risks`.
-   These are stored on `ClusterDigest` and `GlobalDigest` (added in Phase 2)
-   and included in query context. Documents ingested before Phase 2 will have
-   empty dicts/lists for these fields — re-ingestion populates them.
+   These are stored on `ClusterDigest` and `GlobalDigest` and included in query context.
+   Documents ingested before these fields were added will have empty dicts/lists — re-ingestion populates them.
 
 ## Why Not RAG?
 
@@ -141,4 +153,4 @@ For documents larger than the sample:
 We use `tiktoken.get_encoding("cl100k_base")` (GPT tokenizer) as a proxy for
 Llama's tokenizer. This gives a ~5–10% overestimate vs. the actual Llama tokenizer,
 which is a **safe margin** — we consume slightly less context than we account for,
-never more. The budget limit is set to 120K (not 128K) for an additional safety layer.
+never more. The budget limit is set to 22K with additional output headroom built in.

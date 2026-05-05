@@ -14,8 +14,8 @@ from typing import AsyncIterator
 import httpx
 
 CEREBRAS_BASE = "https://api.cerebras.ai/v1"
-PRIMARY_MODEL = "llama3.1-8b"     # 8K context window
-FAST_MODEL = "llama3.1-8b"
+PRIMARY_MODEL = "llama3.1-8b"
+FAST_MODEL    = "llama3.1-8b"
 
 logger = logging.getLogger(__name__)
 

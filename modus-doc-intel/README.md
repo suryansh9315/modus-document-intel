@@ -11,12 +11,12 @@ PDF → OCR → Segment → L1 Analysis → L2 Cluster → L3 Global
                                 ↓                    ↓
                              DuckDB              MongoDB
                                 ↓                    ↓
-User Query → LangGraph → Context Budget → Cerebras LLM → SSE → Browser
+User Query → LangGraph → Context Budget → Groq / Cerebras → SSE → Browser
 ```
 
 **Two phases:**
-1. **Offline ingestion**: Async pipeline runs OCR + segmentation + hierarchical summarization
-2. **Online query** (<10s): LangGraph assembles pre-computed context and routes to specialized agents
+1. **Offline ingestion**: Async pipeline runs OCR + segmentation + hierarchical summarization (Cerebras only)
+2. **Online query** (<30s): LangGraph assembles pre-computed context and routes to specialized agents (Groq for reasoning, Cerebras for contradiction detection)
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system diagram.
 
@@ -25,14 +25,15 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system diagram.
 ### Prerequisites
 
 - Docker + Docker Compose
-- A Cerebras API key (free at [cloud.cerebras.ai](https://cloud.cerebras.ai))
+- A Cerebras API key (free at [cloud.cerebras.ai](https://cloud.cerebras.ai)) — used for ingestion + contradiction detection
+- A Groq API key (free at [console.groq.com](https://console.groq.com)) — used for all query reasoning
 
 ### 1. Configure environment
 
 ```bash
 cd modus-doc-intel
 cp .env.example .env
-# Edit .env and add your CEREBRAS_API_KEY
+# Edit .env and add your CEREBRAS_API_KEY and GROQ_API_KEY
 ```
 
 ### 2. Start infrastructure
@@ -52,7 +53,7 @@ Upload any PDF via the web UI at [http://localhost:3000](http://localhost:3000),
 python modus-doc-intel/scripts/seed_icici.py
 ```
 
-Ingestion time scales with document size. The 341-page ICICI report takes approximately 3–5 minutes (OCR + parallel L1 summaries via llama3.1-8b on Cerebras, up to 4 concurrent). Re-uploading the same PDF skips OCR entirely via a local JSON cache.
+Ingestion time scales with document size. The 341-page ICICI report takes approximately 3–5 minutes (OCR + parallel L1 summaries via `llama3.1-8b` on Cerebras, with rate-limit-aware throttling). Re-uploading the same PDF skips OCR entirely via a local JSON cache.
 
 ### 4. Query the document
 
@@ -125,8 +126,8 @@ modus-doc-intel/
 │   ├── schemas/          # Shared Pydantic models
 │   └── prompts/          # Jinja2 prompt templates
 ├── services/
-│   ├── workers/          # Ingestion pipeline (OCR → L1 → L2 → L3)
-│   └── agents/           # LangGraph query agents
+│   ├── workers/          # Ingestion pipeline (OCR → L1 → L2 → L3) — Cerebras only
+│   └── agents/           # LangGraph query agents — Groq + Cerebras
 ├── apps/
 │   ├── api/              # FastAPI gateway
 │   └── web/              # Next.js 15 frontend
@@ -138,10 +139,34 @@ modus-doc-intel/
 
 ## Models Used
 
-- **gpt-oss-120b** (via Cerebras): L2/L3 aggregation, contradiction analysis, query synthesis — 128K context
-- **llama3.1-8b** (via Cerebras): L1 per-section summaries, structured extraction (JSON mode) — fast, low-cost
-- **docTR** (local): OCR for scanned/image-only pages
-- **pdfplumber** (local): Text extraction for text-native pages
+### Ingestion (Cerebras — `api.cerebras.ai/v1`)
+
+| Model | Stage | Purpose |
+|---|---|---|
+| `llama3.1-8b` | L1, L2, L3 | Per-section summaries, cluster digests, global digest |
+
+### Query Pipeline
+
+| Provider | Model | Used for |
+|---|---|---|
+| **Groq** (`api.groq.com`) | `meta-llama/llama-4-scout-17b-16e-instruct` | EXTRACT_*, SUMMARIZE_FULL, SUMMARIZE_SECTION, CROSS_SECTION_COMPARE |
+| **Cerebras** (`api.cerebras.ai`) | `llama3.1-8b` | DETECT_CONTRADICTIONS |
+
+### Local / Rule-based
+
+| Model | Purpose |
+|---|---|
+| **docTR** | OCR for scanned/image-only pages |
+| **pdfplumber** | Text extraction for text-native pages |
+
+### API Rate Limits
+
+| Provider | RPM | RPD | TPM |
+|---|---|---|---|
+| Cerebras `llama3.1-8b` | 30 | 14,400 | 6K |
+| Groq `llama-4-scout` | 30 | 1,000 | 30K |
+
+The query pipeline uses exactly **1 Groq call per query** (or 0 for contradiction detection).
 
 ## Context Strategy
 
@@ -150,7 +175,7 @@ A 341-page document (~248K tokens) is compressed into a hierarchical tree:
 - **L2**: ~4K tokens per cluster (5–7 sections synthesized) + `consolidated_metrics` dict
 - **L3**: ~3K tokens for the whole document (global digest) + `executive_summary` + `top_metrics` + `top_risks`
 
-At query time, the aggregation node loads the right context levels within a **120K token budget**. Context assembly is query-type-aware:
+At query time, the aggregation node loads context within a **22K token budget** (driven by Groq llama-4-scout's 30K TPM limit). Context assembly is query-type-aware:
 - `EXTRACT_*` queries load sections sorted by content density (most metric-rich first) and seed the LLM with pre-extracted DuckDB claims.
 - `SUMMARIZE_SECTION` loads up to 4 neighboring sections within ±20 pages of the requested section.
 - `DETECT_CONTRADICTIONS` sorts candidates by question-keyword relevance before the top-20 cap.

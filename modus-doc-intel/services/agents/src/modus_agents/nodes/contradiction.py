@@ -12,7 +12,7 @@ import uuid
 
 from modus_prompts import PromptRegistry
 from modus_schemas import AgentState, ContradictionReport
-from modus_agents.llm import get_groq_client, FAST_MODEL, PRIMARY_MODEL
+from modus_agents.llm import get_cerebras_client, FAST_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ async def contradiction_node(state: AgentState) -> AgentState:
     2. Ask Llama-70B to classify: genuine contradiction vs. explainable.
     3. Populate state["contradictions"] with ContradictionReport objects.
     """
-    client = get_groq_client()
+    client = get_cerebras_client()
     doc = state["doc"]
     query = state["query"]
 

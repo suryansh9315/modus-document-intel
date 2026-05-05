@@ -9,7 +9,7 @@ import logging
 
 from modus_prompts import PromptRegistry
 from modus_schemas import AgentState, QueryType
-from modus_agents.llm import get_groq_client, PRIMARY_MODEL, FAST_MODEL
+from modus_agents.llm import get_groq_primary_client, PRIMARY_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ async def local_analysis_node(state: AgentState) -> AgentState:
     For CROSS_SECTION_COMPARE: renders the cross_compare template.
     For SUMMARIZE_SECTION: renders the summarize_section template.
     """
-    client = get_groq_client()
+    client = get_groq_primary_client()
     query = state["query"]
     doc = state["doc"]
 
@@ -76,7 +76,7 @@ async def local_analysis_node(state: AgentState) -> AgentState:
         )
 
     try:
-        analysis = await client.complete(messages, model=FAST_MODEL)
+        analysis = await client.complete(messages, model=PRIMARY_MODEL)
     except Exception as e:
         logger.error(f"local_analysis_node LLM call failed: {e}")
         analysis = f"Analysis unavailable due to API error: {e}"

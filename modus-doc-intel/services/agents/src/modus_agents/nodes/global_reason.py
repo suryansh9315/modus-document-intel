@@ -9,7 +9,7 @@ import logging
 
 from modus_prompts import PromptRegistry
 from modus_schemas import AgentState
-from modus_agents.llm import get_groq_client, PRIMARY_MODEL
+from modus_agents.llm import get_groq_primary_client, PRIMARY_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ async def global_reasoning_node(state: AgentState) -> AgentState:
     """
     Synthesize an answer using the full hierarchical context (L3 + L2 + L1).
     """
-    client = get_groq_client()
+    client = get_groq_primary_client()
     query = state["query"]
 
     global_context = state.get("_global_context", "")

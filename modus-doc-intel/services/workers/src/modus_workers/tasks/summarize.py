@@ -43,7 +43,7 @@ MIN_MERGE_PAGES = 4
 # 3.0s interval → ≤ 20 req/min; leaves headroom for L2/L3 calls using the same model.
 _semaphore = asyncio.Semaphore(1)
 _REQUEST_INTERVAL = 6.0  # minimum seconds between requests
-_TPM_LIMIT = 55_000       # conservative budget under Cerebras free tier 60k TPM
+_TPM_LIMIT = 6_000        # Cerebras llama-3.1-3b: 6K TPM
 
 
 def _pages_for_section(
@@ -360,7 +360,7 @@ async def generate_l2(
         try:
             raw, tokens_used = await groq_client.complete_with_usage(
                 messages,
-                model=PRIMARY_MODEL,
+                model=FAST_MODEL,
                 response_format={"type": "json_object"},
             )
         except Exception as e:
@@ -420,7 +420,7 @@ async def generate_l3(
         try:
             raw, tokens_used = await groq_client.complete_with_usage(
                 messages,
-                model=PRIMARY_MODEL,
+                model=FAST_MODEL,
                 response_format={"type": "json_object"},
             )
         except Exception as e:

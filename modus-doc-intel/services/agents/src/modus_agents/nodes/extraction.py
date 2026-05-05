@@ -11,7 +11,7 @@ import re
 
 from modus_prompts import PromptRegistry
 from modus_schemas import AgentState, QueryType
-from modus_agents.llm import get_groq_client, FAST_MODEL
+from modus_agents.llm import get_groq_primary_client, PRIMARY_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ async def extraction_node(state: AgentState) -> AgentState:
     Extract structured data (entities, risks, or decisions) from document context.
     Uses Llama-8B with JSON mode for speed and structured output.
     """
-    client = get_groq_client()
+    client = get_groq_primary_client()
     query = state["query"]
     doc = state["doc"]
 
@@ -113,7 +113,7 @@ async def extraction_node(state: AgentState) -> AgentState:
     try:
         raw = await client.complete(
             messages,
-            model=FAST_MODEL,
+            model=PRIMARY_MODEL,
             response_format={"type": "json_object"},
         )
     except Exception as e:
@@ -151,31 +151,6 @@ async def extraction_node(state: AgentState) -> AgentState:
         and str(item.get("name", "")).strip()
         and str(item.get("name", "")).strip().lower() not in ("unknown", "n/a", "none")
     ]
-
-    # Fix 5b: retry once if result is empty
-    if not items:
-        logger.warning("extraction_node: 0 valid items, retrying with explicit instruction")
-        retry_msgs = messages[:]
-        retry_msgs[-1] = dict(retry_msgs[-1])
-        retry_msgs[-1]["content"] += (
-            "\n\nThe previous response had 0 items. You MUST return at least 5 items. "
-            "Use the pre-extracted candidates as starting points if direct evidence is sparse."
-        )
-        try:
-            raw = await client.complete(
-                retry_msgs,
-                model=FAST_MODEL,
-                response_format={"type": "json_object"},
-            )
-            data = _parse_json_response(raw)
-            items = [i for i in (data.get("items") or []) if isinstance(i, dict)]
-            items = [
-                item for item in items
-                if str(item.get("name", "")).strip()
-                and str(item.get("name", "")).strip().lower() not in ("unknown", "n/a", "none")
-            ]
-        except Exception:
-            pass  # keep empty list on retry failure
 
     # Format as readable answer
     lines = [f"## Extracted {extraction_type.capitalize()}\n"]

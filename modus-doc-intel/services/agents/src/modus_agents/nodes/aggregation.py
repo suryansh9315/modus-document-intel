@@ -15,17 +15,14 @@ from modus_schemas import AgentState, QueryType
 
 logger = logging.getLogger(__name__)
 
-# Token budget: 120K (safety margin under 128K)
-TOKEN_BUDGET = 120_000
+# Token budget driven by Groq llama-4-scout PRIMARY_MODEL (30K TPM).
+# 30K TPM - 8K max output - ~500 prompt overhead = ~21500 safe input ceiling.
+TOKEN_BUDGET = 22_000
 
 # Rough token limits for each compression level
 L3_TOKEN_BUDGET = 3_500
 L2_TOKEN_BUDGET = 4_500   # per cluster digest
 L1_TOKEN_BUDGET = 1_800   # per section summary
-
-# SUMMARIZE_FULL budget for llama3.1-8b (8K context window).
-# 8192 total - 4096 max_tokens output - ~900 prompt overhead = ~3200 for context.
-SUMMARIZE_FULL_CONTEXT_BUDGET = 3_200
 
 _encoder = None
 
@@ -113,19 +110,6 @@ async def aggregation_node(state: AgentState) -> AgentState:
             global_context += f"\n\n## Top Risks\n{risk_lines}"
         budget_used += _count_tokens(global_context)
         context_used.append("L3:global")
-
-    # SUMMARIZE_FULL: llama3.1-8b has an 8K context window.
-    # Truncate L3 to fit the budget and return early — skip L2 and L1.
-    if query.query_type == QueryType.SUMMARIZE_FULL:
-        global_context = _truncate_to_tokens(global_context, SUMMARIZE_FULL_CONTEXT_BUDGET)
-        budget_used = _count_tokens(global_context)
-        state["_global_context"] = global_context
-        state["_cluster_context"] = ""
-        state["_section_context"] = ""
-        state["context_used"] = context_used
-        state["token_budget_used"] = budget_used
-        logger.info(f"SUMMARIZE_FULL: {budget_used} tokens (L3 only, capped for 8K model)")
-        return state
 
     # Load L2 cluster digests (up to budget)
     cluster_context_parts = []

@@ -17,8 +17,11 @@ class Settings(BaseSettings):
     # DuckDB
     duckdb_path: str = "/data/modus.duckdb"
 
-    # Cerebras
+    # Cerebras (FAST_MODEL — ingestion + fast query nodes)
     cerebras_api_key: str = ""
+
+    # Groq (PRIMARY_MODEL — global reasoning + query synthesis)
+    groq_api_key: str = ""
 
     # File storage
     upload_dir: str = "/data/uploads"

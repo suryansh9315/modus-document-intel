@@ -10,7 +10,7 @@ import logging
 
 from modus_prompts import PromptRegistry
 from modus_schemas import AgentState, QueryType
-from modus_agents.llm import get_groq_client, PRIMARY_MODEL
+from modus_agents.llm import get_groq_primary_client, PRIMARY_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ async def query_node(state: AgentState) -> AgentState:
 
     Produces the final state["answer"] used by the streaming API.
     """
-    client = get_groq_client()
+    client = get_groq_primary_client()
     query = state["query"]
 
     analysis_result = state["_analysis_result"]
@@ -39,6 +39,9 @@ async def query_node(state: AgentState) -> AgentState:
         QueryType.EXTRACT_RISKS,
         QueryType.EXTRACT_DECISIONS,
         QueryType.DETECT_CONTRADICTIONS,
+        QueryType.SUMMARIZE_FULL,
+        QueryType.SUMMARIZE_SECTION,       # local_analysis_node now runs on Groq directly
+        QueryType.CROSS_SECTION_COMPARE,   # local_analysis_node now runs on Groq directly
     }
     if query.query_type in _PASSTHROUGH_TYPES:
         state["answer"] = analysis_result or "No results available."
