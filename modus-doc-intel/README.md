@@ -1,8 +1,8 @@
 # Modus Document Intelligence
 
-Multi-agent AI system for processing large scanned documents (~500+ pages). Demonstrates hierarchical compression, cross-section reasoning, and contradiction detection without RAG or vector databases.
+Multi-agent AI system for processing large PDF documents (~500+ pages). Demonstrates hierarchical compression, cross-section reasoning, and contradiction detection without RAG or vector databases.
 
-The provided sample document is the ICICI Bank Annual Report (341 pages, ~248K tokens), but the system works with any large scanned or text-native PDF.
+The provided sample document is the ICICI Bank Annual Report (341 pages, ~248K tokens), but the system works with any large text-native PDF (bank statements, annual reports, regulatory filings).
 
 ## Architecture
 
@@ -39,10 +39,11 @@ cp .env.example .env
 ### 2. Start infrastructure
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d
+# Local development (full stack)
+docker compose -f infra/docker-compose.local.yml up -d
 ```
 
-This starts: MongoDB, Redis, FastAPI (port 8000), and Next.js (port 3000).
+This starts: MongoDB, FastAPI (port 8000), and Next.js (port 3000).
 
 ### 3. Upload a document
 
@@ -71,6 +72,32 @@ curl -X POST http://localhost:8000/queries/ \
     "stream": false
   }'
 ```
+
+## Deployment
+
+### Production (DigitalOcean droplet + Atlas + Vercel)
+
+**API** — runs on a droplet (1 vCPU / 1 GB RAM minimum):
+```bash
+# On the droplet
+docker compose -f infra/docker-compose.yml up -d
+```
+Set `MONGO_URI` to your Atlas connection string in `.env`. Only the `api` container runs — no MongoDB locally.
+
+**Frontend** — deploy `apps/web` to [Vercel](https://vercel.com). Set these env vars in Vercel:
+```
+NEXT_PUBLIC_API_URL=http://<droplet-ip>:8000
+API_URL=http://<droplet-ip>:8000
+```
+
+**CORS** — add your Vercel URL to `.env` on the droplet:
+```
+CORS_ORIGINS=https://your-app.vercel.app
+```
+
+Live deployment: [modus-document-intel.vercel.app](https://modus-document-intel.vercel.app)
+
+---
 
 ## Development Setup
 
@@ -153,10 +180,9 @@ modus-doc-intel/
 
 ### Local / Rule-based
 
-| Model | Purpose |
+| Tool | Purpose |
 |---|---|
-| **docTR** | OCR for scanned/image-only pages |
-| **pdfplumber** | Text extraction for text-native pages |
+| **pdfplumber** | PDF text extraction (all pages, including tables serialized as markdown) |
 
 ### API Rate Limits
 
@@ -175,7 +201,7 @@ A 341-page document (~248K tokens) is compressed into a hierarchical tree:
 - **L3**: ~3K tokens for the whole document (global digest) + `executive_summary` + `top_metrics` + `top_risks`
 
 At query time, the aggregation node loads context within a **22K token budget** (driven by Groq llama-4-scout's 30K TPM limit). Context assembly is query-type-aware:
-- `EXTRACT_ENTITIES` loads sections sorted by content density with no DuckDB seed — named entity extraction (PERSON, ORG, PRODUCT, REGULATION, LOCATION) uses full L3+L2+L1 context only.
+- `EXTRACT_ENTITIES` seeds from the DuckDB entities table (typed named entities written during ingestion: PERSON, ORG, PRODUCT, REGULATION, LOCATION) and loads full L3+L2+L1 context.
 - `EXTRACT_RISKS` and `EXTRACT_DECISIONS` load sections sorted by content density and seed the LLM with pre-extracted DuckDB claims (`risk_factor` and `commitment` claim types respectively).
 - `SUMMARIZE_SECTION` loads up to 4 neighboring sections within ±20 pages of the requested section.
 - `DETECT_CONTRADICTIONS` sorts candidates by question-keyword relevance before the top-20 cap.

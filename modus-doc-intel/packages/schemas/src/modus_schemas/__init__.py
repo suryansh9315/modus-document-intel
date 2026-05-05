@@ -54,7 +54,7 @@ class PageOCR(BaseModel):
     page_number: int
     raw_text: str
     confidence: float
-    ocr_engine: Literal["doctr", "pdfplumber"]
+    ocr_engine: Literal["pdfplumber"]
     has_tables: bool = False
     table_markdown: str | None = None
 

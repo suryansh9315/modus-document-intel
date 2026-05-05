@@ -2,7 +2,7 @@
 
 ## System Overview
 
-A two-phase multi-agent system for processing large scanned documents (500+ pages):
+A two-phase multi-agent system for processing large PDF documents (500+ pages):
 
 ```
                         ┌─────────────────────────────────────────────────┐
@@ -13,7 +13,7 @@ A two-phase multi-agent system for processing large scanned documents (500+ page
                     ┌─────────────────────▼──────────────────────┐
 PDF ──────────────► │                                              │
                     │   OCR Task                                   │
-                    │   (docTR + pdfplumber hybrid)                │
+                    │   (pdfplumber — tables as markdown)          │
                     │   → L0 PageOCR records                       │
                     └─────────────────────┬──────────────────────┘
                                           │ N PageOCR objects (one per page)
@@ -83,8 +83,8 @@ loaded into the query-time context budget.
 **Groq is never called during ingestion.**
 
 **Pipeline:**
-1. **OCR** (`modus_workers/tasks/ocr.py`) — pdfplumber for text-native pages, docTR
-   for scanned/image pages. Tables serialized as markdown to prevent hallucination.
+1. **OCR** (`modus_workers/tasks/ocr.py`) — pdfplumber for all pages. Tables serialized
+   as markdown to prevent hallucination.
 2. **Segmentation** (`modus_workers/tasks/segment.py`) — heading regex detection with
    fallback to equal 30-page chunks (ensures ≥5 sections for L1/L2/L3 pipeline).
 3. **L1 Analysis** (`modus_workers/tasks/summarize.py`) — Cerebras `llama3.1-8b`.
@@ -93,8 +93,8 @@ loaded into the query-time context budget.
    Sections exceeding 8K chars split into overlapping 8K-char chunks (500-char overlap);
    one LLM call per chunk, results merged (key_metrics unioned, claims deduplicated).
    OCR output cached as `{stem}_ocr.json` to skip re-OCR on retries.
-4. **DuckDB Write** (`modus_workers/tasks/duckdb_write.py`) — all ExtractedClaims
-   written to DuckDB for SQL-based contradiction detection and extraction seeding.
+4. **DuckDB Write** (`modus_workers/tasks/duckdb_write.py`) — ExtractedClaims and
+   ExtractedEntities written to DuckDB for contradiction detection and extraction seeding.
 5. **L2 Aggregation** — 5–7 sections clustered and digested by `llama3.1-8b`.
    Stores `consolidated_metrics: dict[str, str]` on `ClusterDigest`.
 6. **L3 Global** — all cluster digests synthesized into a single global digest by `llama3.1-8b`.
@@ -114,7 +114,7 @@ context budget and routing to a specialized agent node.
 - `aggregation` — loads L3 + L2 + L1 within 22K token budget; for `EXTRACT_*` sorts L1 sections by content density; for `SUMMARIZE_SECTION` also loads up to 4 neighboring sections within ±20 pages
 - `local_analysis` — Groq: direct answer for SUMMARIZE_SECTION and CROSS_SECTION_COMPARE
 - `global_reasoning` — Groq: full-document synthesis for SUMMARIZE_FULL (L3 + L2 + L1 context)
-- `extraction` — Groq JSON mode: structured extraction; EXTRACT_ENTITIES uses full context only (no DuckDB seed), EXTRACT_RISKS/DECISIONS seeded with DuckDB claims
+- `extraction` — Groq JSON mode: structured extraction; EXTRACT_ENTITIES seeded from DuckDB entities table (typed named entities from ingestion); EXTRACT_RISKS/DECISIONS seeded with DuckDB claims
 - `contradiction` — Groq JSON mode: DuckDB SQL + LLM classification; candidates re-sorted by question-keyword relevance before top-20 cap
 - `query` — passthrough only; no LLM call for any query type
 
@@ -122,13 +122,14 @@ context budget and routing to a specialized agent node.
 
 ```
 PDF File
-  └─► OCR (pdfplumber / docTR)
+  └─► OCR (pdfplumber)
         └─► PageOCR[]  (L0)
               └─► Section Detection
                     └─► SectionBoundary[]
                           └─► L1 Analysis (llama3.1-8b · Cerebras)
                                 ├─► SectionSummary[]  (L1) ──► MongoDB
-                                └─► ExtractedClaim[]  ──────► DuckDB
+                                ├─► ExtractedClaim[]   ─────► DuckDB (claims)
+                                └─► ExtractedEntity[]  ─────► DuckDB (entities)
                                       └─► L2 Aggregation (llama3.1-8b · Cerebras)
                                             └─► ClusterDigest[]  (L2) ──► MongoDB
                                                   └─► L3 Global (llama3.1-8b · Cerebras)
@@ -143,10 +144,10 @@ User Query ──► FastAPI ──► LangGraph ──► MongoDB (load context
 
 | Component | Location | Responsibility |
 |---|---|---|
-| OCR Task | `services/workers/tasks/ocr.py` | Hybrid text extraction |
+| OCR Task | `services/workers/tasks/ocr.py` | PDF text extraction via pdfplumber |
 | Segmentation Task | `services/workers/tasks/segment.py` | Section boundary detection |
 | Summarization Tasks | `services/workers/tasks/summarize.py` | L1/L2/L3 generation (Cerebras) |
-| DuckDB Task | `services/workers/tasks/duckdb_write.py` | Claims storage + contradiction queries |
+| DuckDB Task | `services/workers/tasks/duckdb_write.py` | Claims + entities storage, contradiction queries |
 | Ingestion Flow | `services/workers/flows/ingest_document.py` | Async pipeline orchestration |
 | Cerebras Client (workers) | `services/workers/groq_client.py` | httpx to Cerebras — ingestion only |
 | Groq Client (agents) | `services/agents/llm.py` — `GroqPrimaryClient` | httpx to Groq — all query nodes |
