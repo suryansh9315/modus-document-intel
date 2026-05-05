@@ -30,8 +30,9 @@ async def _get_mongo():
     """Get async MongoDB client."""
     import motor.motor_asyncio
     mongo_uri = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+    mongo_db_name = os.environ.get("MONGO_DB_NAME", "modus_db")
     client = motor.motor_asyncio.AsyncIOMotorClient(mongo_uri)
-    return client["modus_db"]
+    return client[mongo_db_name]
 
 
 async def _update_doc_status(db, doc_id: str, status: DocumentStatus, **kwargs):
