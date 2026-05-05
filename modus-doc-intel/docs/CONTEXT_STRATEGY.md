@@ -67,7 +67,7 @@ The aggregation node tailors which context is loaded based on the query type:
 |---|---|---|
 | `SUMMARIZE_FULL` | All sections within budget (density order) | L3 top_metrics + top_risks prominently placed |
 | `SUMMARIZE_SECTION` | Requested sections + up to 4 neighbors within ±20 pages | — |
-| `EXTRACT_ENTITIES` | All sections, sorted by `key_metrics` count descending | DuckDB `metric` claims prepended as seed candidates |
+| `EXTRACT_ENTITIES` | All sections, sorted by `key_metrics` count descending | No DuckDB seed — entity extraction uses full L3+L2+L1 context only |
 | `EXTRACT_RISKS` | All sections, sorted by `key_risks` count descending | DuckDB `risk_factor` claims prepended as seed candidates |
 | `EXTRACT_DECISIONS` | All sections, sorted by `commitment` claim count descending | DuckDB `commitment` claims prepended as seed candidates |
 | `DETECT_CONTRADICTIONS` | Relevant sections (context[:3000]) | DuckDB contradiction candidates re-sorted by question-keyword relevance before top-20 cap |
@@ -84,7 +84,7 @@ The query node is a full passthrough with no additional LLM call.
 | SUMMARIZE_FULL | llama-4-scout | Groq | ~18K in + 4K out |
 | SUMMARIZE_SECTION | llama-4-scout | Groq | ~8K in + 3K out |
 | CROSS_SECTION_COMPARE | llama-4-scout | Groq | ~6K in + 3K out |
-| DETECT_CONTRADICTIONS | llama3.1-8b | Cerebras | ~4K in + 2K out |
+| DETECT_CONTRADICTIONS | llama-4-scout | Groq | ~4K in + 2K out |
 
 ## Invariants (Never Violated)
 
@@ -108,13 +108,14 @@ The query node is a full passthrough with no additional LLM call.
 5. **Contradiction detection uses normalized subjects.** `ExtractedClaim.subject`
    is stored in DuckDB and normalized to lowercase for matching. Candidate pairs
    share the same `doc_id` and `subject` but have differing `value` fields —
-   `llama3.1-8b` then classifies whether the difference is a genuine inconsistency
+   `llama-4-scout` (Groq) then classifies whether the difference is a genuine inconsistency
    or an explainable variation (different sections, methodologies, etc.).
 
 6. **DuckDB claims are dual-use.** The `claims` table serves both contradiction detection
    (`query_contradictions`) and extraction seeding (`get_claims_by_type`). Claim types
-   `metric`, `risk_factor`, and `commitment` map directly to `EXTRACT_ENTITIES`,
-   `EXTRACT_RISKS`, and `EXTRACT_DECISIONS` respectively.
+   `risk_factor` and `commitment` map to `EXTRACT_RISKS` and `EXTRACT_DECISIONS` respectively.
+   `EXTRACT_ENTITIES` uses no DuckDB seed — metric seeds caused entity queries to return
+   financial metrics instead of named entities (PERSON, ORG, PRODUCT, REGULATION).
 
 7. **Structured fields on L2/L3 are always captured.** The L2 prompt returns
    `consolidated_metrics` and the L3 prompt returns `top_metrics`/`top_risks`.

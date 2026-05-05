@@ -13,7 +13,7 @@
 | 7 | **Global Reasoning** | L3 + L2 + L1 context | final answer | `llama-4-scout` | Groq | Full-doc synthesis for SUMMARIZE_FULL |
 | 8 | **Local Analysis (Query)** | Section context | final answer | `llama-4-scout` | Groq | Section/cross-compare answering |
 | 9 | **Extractor** | L3+L2+L1 context + DuckDB seed claims | JSON entities/risks/decisions | `llama-4-scout` | Groq | Structured extraction in JSON mode |
-| 10 | **Contradiction** | DuckDB candidates + context | `list[ContradictionReport]` | `llama3.1-8b` | Cerebras | Conflict classification and explanation |
+| 10 | **Contradiction** | DuckDB candidates + context | `list[ContradictionReport]` | `llama-4-scout` | Groq | Conflict classification and explanation |
 | 11 | **Query Node** | `_analysis_result` from branch | final answer (passthrough) | — | — | Full passthrough — no LLM call |
 
 ---
@@ -30,7 +30,7 @@ Every query type makes **exactly 1 LLM call**. The query node is a passthrough f
 | `SUMMARIZE_FULL` | global_reasoning_node | `llama-4-scout` | Groq |
 | `SUMMARIZE_SECTION` | local_analysis_node | `llama-4-scout` | Groq |
 | `CROSS_SECTION_COMPARE` | local_analysis_node | `llama-4-scout` | Groq |
-| `DETECT_CONTRADICTIONS` | contradiction_node | `llama3.1-8b` | Cerebras |
+| `DETECT_CONTRADICTIONS` | contradiction_node | `llama-4-scout` | Groq |
 
 ---
 
@@ -160,11 +160,13 @@ Uses Groq llama-4-scout with JSON mode (`response_format: {"type": "json_object"
 | L1 section summaries | summary_text + key_metrics + key_risks (density-sorted) |
 
 **DuckDB seed claims:** Before the LLM call, pre-extracted claims are fetched from DuckDB and prepended as "PRE-EXTRACTED CANDIDATES":
-- `EXTRACT_ENTITIES` → `claim_type = "metric"` claims
+- `EXTRACT_ENTITIES` → no seed (metric seeds caused financial metrics to be returned instead of named entities)
 - `EXTRACT_RISKS` → `claim_type = "risk_factor"` claims
 - `EXTRACT_DECISIONS` → `claim_type = "commitment"` claims
 
 The LLM refines, deduplicates, and augments the candidate list rather than starting from scratch. Seed fetch failures degrade gracefully.
+
+**Entity extraction scope:** The extraction prompt instructs the model to extract named entities only — PERSON (executives, directors), ORGANIZATION (subsidiaries, regulators, partners), PRODUCT (financial products, services), REGULATION (laws, guidelines, frameworks), LOCATION (countries, cities, offices). Financial metrics and ratios are explicitly excluded from entity extraction.
 
 **Section ordering:** For `EXTRACT_*` queries, `aggregation_node` sorts L1 sections by content density (most `key_metrics` / `key_risks` / commitment claims first) so the most information-rich sections load within the token budget.
 
@@ -176,7 +178,7 @@ Output schema per item: `{name, value, description, section, page}`
 
 ### 10. Contradiction Agent
 **File:** `services/agents/nodes/contradiction.py`
-**Model:** `llama3.1-8b` via Cerebras
+**Model:** `meta-llama/llama-4-scout-17b-16e-instruct` via Groq
 
 **Two-stage process:**
 1. **SQL query** to DuckDB via `duckdb_write.query_contradictions()`: finds `(claim_a, claim_b)` pairs where
@@ -189,6 +191,8 @@ Output schema per item: `{name, value, description, section, page}`
    - Severity: high / medium / low.
 
 Uses `duckdb.connect(read_only=True)` for concurrent query-time safety.
+
+**JSON robustness:** Uses `_parse_json_response()` with markdown-fence stripping and brace-extraction fallback. Parse failures return an empty contradictions list rather than surfacing raw model output.
 
 ---
 

@@ -2,19 +2,45 @@
 Contradiction detection node.
 
 Queries DuckDB for same-subject, different-value claims.
-Uses Llama-70B to determine genuine vs. explainable contradictions.
+Uses llama-4-scout (Groq) to determine genuine vs. explainable contradictions.
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 
 from modus_prompts import PromptRegistry
 from modus_schemas import AgentState, ContradictionReport
-from modus_agents.llm import get_cerebras_client, FAST_MODEL
+from modus_agents.llm import get_groq_primary_client, PRIMARY_MODEL
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_json_response(raw: str) -> dict:
+    """Parse a JSON response, handling markdown fences and partial wrapping."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    cleaned = raw.strip()
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", cleaned)
+    if fence_match:
+        try:
+            return json.loads(fence_match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    brace_match = re.search(r"\{[\s\S]+\}", cleaned)
+    if brace_match:
+        try:
+            return json.loads(brace_match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    raise json.JSONDecodeError("No valid JSON found", raw, 0)
 
 
 def _get_contradiction_candidates(doc_id: str) -> list[dict]:
@@ -35,7 +61,7 @@ async def contradiction_node(state: AgentState) -> AgentState:
     2. Ask Llama-70B to classify: genuine contradiction vs. explainable.
     3. Populate state["contradictions"] with ContradictionReport objects.
     """
-    client = get_cerebras_client()
+    client = get_groq_primary_client()
     doc = state["doc"]
     query = state["query"]
 
@@ -90,7 +116,7 @@ async def contradiction_node(state: AgentState) -> AgentState:
     try:
         raw = await client.complete(
             messages,
-            model=FAST_MODEL,
+            model=PRIMARY_MODEL,
             response_format={"type": "json_object"},
         )
     except Exception as e:
@@ -103,7 +129,7 @@ async def contradiction_node(state: AgentState) -> AgentState:
     analysis_text = ""
 
     try:
-        data = json.loads(raw)
+        data = _parse_json_response(raw)
         analysis_text = data.get("summary") or ""
 
         for item in (data.get("contradictions") or []):
@@ -136,7 +162,7 @@ async def contradiction_node(state: AgentState) -> AgentState:
 
     except (json.JSONDecodeError, KeyError) as e:
         logger.error(f"Contradiction classification failed: {e}")
-        analysis_text = raw[:1000]
+        analysis_text = ""
 
     # Build readable answer
     if contradictions:

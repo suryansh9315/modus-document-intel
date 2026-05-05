@@ -27,3 +27,4 @@ RULES:
 - Values must be EXACT — no rounding or paraphrasing.
 - For page: use the integer from [pp.N–M] ranges in the context (use the start page). Omit the field entirely if no page is available — do NOT write null or "null".
 - If "PRE-EXTRACTED CANDIDATES" appear above the context separator, use them as a starting point. Refine, deduplicate, and augment with any additional items you find in the context below.
+- For extraction_type "entities": extract named entities only — PERSON (executives, directors), ORGANIZATION (subsidiaries, regulators, partners), PRODUCT (financial products, services), REGULATION (laws, guidelines, frameworks), LOCATION (countries, cities, offices). Do NOT extract financial metrics, ratios, or numerical KPIs as entities.

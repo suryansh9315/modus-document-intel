@@ -11,12 +11,12 @@ PDF → OCR → Segment → L1 Analysis → L2 Cluster → L3 Global
                                 ↓                    ↓
                              DuckDB              MongoDB
                                 ↓                    ↓
-User Query → LangGraph → Context Budget → Groq / Cerebras → SSE → Browser
+User Query → LangGraph → Context Budget → Groq → SSE → Browser
 ```
 
 **Two phases:**
 1. **Offline ingestion**: Async pipeline runs OCR + segmentation + hierarchical summarization (Cerebras only)
-2. **Online query** (<30s): LangGraph assembles pre-computed context and routes to specialized agents (Groq for reasoning, Cerebras for contradiction detection)
+2. **Online query** (<30s): LangGraph assembles pre-computed context and routes to specialized agents (Groq for all query types)
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system diagram.
 
@@ -25,7 +25,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system diagram.
 ### Prerequisites
 
 - Docker + Docker Compose
-- A Cerebras API key (free at [cloud.cerebras.ai](https://cloud.cerebras.ai)) — used for ingestion + contradiction detection
+- A Cerebras API key (free at [cloud.cerebras.ai](https://cloud.cerebras.ai)) — used for ingestion only
 - A Groq API key (free at [console.groq.com](https://console.groq.com)) — used for all query reasoning
 
 ### 1. Configure environment
@@ -127,7 +127,7 @@ modus-doc-intel/
 │   └── prompts/          # Jinja2 prompt templates
 ├── services/
 │   ├── workers/          # Ingestion pipeline (OCR → L1 → L2 → L3) — Cerebras only
-│   └── agents/           # LangGraph query agents — Groq + Cerebras
+│   └── agents/           # LangGraph query agents — Groq only
 ├── apps/
 │   ├── api/              # FastAPI gateway
 │   └── web/              # Next.js 15 frontend
@@ -149,8 +149,7 @@ modus-doc-intel/
 
 | Provider | Model | Used for |
 |---|---|---|
-| **Groq** (`api.groq.com`) | `meta-llama/llama-4-scout-17b-16e-instruct` | EXTRACT_*, SUMMARIZE_FULL, SUMMARIZE_SECTION, CROSS_SECTION_COMPARE |
-| **Cerebras** (`api.cerebras.ai`) | `llama3.1-8b` | DETECT_CONTRADICTIONS |
+| **Groq** (`api.groq.com`) | `meta-llama/llama-4-scout-17b-16e-instruct` | All query types: EXTRACT_*, SUMMARIZE_*, CROSS_SECTION_COMPARE, DETECT_CONTRADICTIONS |
 
 ### Local / Rule-based
 
@@ -166,7 +165,7 @@ modus-doc-intel/
 | Cerebras `llama3.1-8b` | 30 | 14,400 | 6K |
 | Groq `llama-4-scout` | 30 | 1,000 | 30K |
 
-The query pipeline uses exactly **1 Groq call per query** (or 0 for contradiction detection).
+The query pipeline uses exactly **1 Groq call per query** for all 7 query types.
 
 ## Context Strategy
 
@@ -176,7 +175,8 @@ A 341-page document (~248K tokens) is compressed into a hierarchical tree:
 - **L3**: ~3K tokens for the whole document (global digest) + `executive_summary` + `top_metrics` + `top_risks`
 
 At query time, the aggregation node loads context within a **22K token budget** (driven by Groq llama-4-scout's 30K TPM limit). Context assembly is query-type-aware:
-- `EXTRACT_*` queries load sections sorted by content density (most metric-rich first) and seed the LLM with pre-extracted DuckDB claims.
+- `EXTRACT_ENTITIES` loads sections sorted by content density with no DuckDB seed — named entity extraction (PERSON, ORG, PRODUCT, REGULATION, LOCATION) uses full L3+L2+L1 context only.
+- `EXTRACT_RISKS` and `EXTRACT_DECISIONS` load sections sorted by content density and seed the LLM with pre-extracted DuckDB claims (`risk_factor` and `commitment` claim types respectively).
 - `SUMMARIZE_SECTION` loads up to 4 neighboring sections within ±20 pages of the requested section.
 - `DETECT_CONTRADICTIONS` sorts candidates by question-keyword relevance before the top-20 cap.
 

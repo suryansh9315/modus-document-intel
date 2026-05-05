@@ -106,8 +106,7 @@ loaded into the query-time context budget.
 context budget and routing to a specialized agent node.
 
 **LLM providers:**
-- **Groq** (`api.groq.com/openai/v1`) — `meta-llama/llama-4-scout-17b-16e-instruct` — all reasoning queries
-- **Cerebras** (`api.cerebras.ai/v1`) — `llama3.1-8b` — contradiction detection only
+- **Groq** (`api.groq.com/openai/v1`) — `meta-llama/llama-4-scout-17b-16e-instruct` — all query types (including contradiction detection)
 
 **Every query type makes exactly 1 LLM call. The query_node is a pure passthrough.**
 
@@ -115,8 +114,8 @@ context budget and routing to a specialized agent node.
 - `aggregation` — loads L3 + L2 + L1 within 22K token budget; for `EXTRACT_*` sorts L1 sections by content density; for `SUMMARIZE_SECTION` also loads up to 4 neighboring sections within ±20 pages
 - `local_analysis` — Groq: direct answer for SUMMARIZE_SECTION and CROSS_SECTION_COMPARE
 - `global_reasoning` — Groq: full-document synthesis for SUMMARIZE_FULL (L3 + L2 + L1 context)
-- `extraction` — Groq JSON mode: structured extraction seeded with DuckDB claims
-- `contradiction` — Cerebras: DuckDB SQL + LLM classification; candidates re-sorted by question-keyword relevance before top-20 cap
+- `extraction` — Groq JSON mode: structured extraction; EXTRACT_ENTITIES uses full context only (no DuckDB seed), EXTRACT_RISKS/DECISIONS seeded with DuckDB claims
+- `contradiction` — Groq JSON mode: DuckDB SQL + LLM classification; candidates re-sorted by question-keyword relevance before top-20 cap
 - `query` — passthrough only; no LLM call for any query type
 
 ## Data Flow
@@ -136,8 +135,7 @@ PDF File
                                                         └─► GlobalDigest  (L3) ──► MongoDB
 
 User Query ──► FastAPI ──► LangGraph ──► MongoDB (load context)
-                                              └─► Groq llama-4-scout (reasoning)
-                                              └─► Cerebras llama3.1-8b (contradictions only)
+                                              └─► Groq llama-4-scout (all query types)
                                                         └─► SSE ──► Browser
 ```
 
@@ -151,8 +149,7 @@ User Query ──► FastAPI ──► LangGraph ──► MongoDB (load context
 | DuckDB Task | `services/workers/tasks/duckdb_write.py` | Claims storage + contradiction queries |
 | Ingestion Flow | `services/workers/flows/ingest_document.py` | Async pipeline orchestration |
 | Cerebras Client (workers) | `services/workers/groq_client.py` | httpx to Cerebras — ingestion only |
-| Cerebras Client (agents) | `services/agents/llm.py` — `CerebrasClient` | httpx to Cerebras — contradiction node |
-| Groq Client (agents) | `services/agents/llm.py` — `GroqPrimaryClient` | httpx to Groq — all reasoning nodes |
+| Groq Client (agents) | `services/agents/llm.py` — `GroqPrimaryClient` | httpx to Groq — all query nodes |
 | LangGraph Graph | `services/agents/graph.py` | Query orchestration |
 | Agent Nodes | `services/agents/nodes/` | Specialized reasoning |
 | FastAPI Gateway | `apps/api/` | REST + SSE API |
@@ -164,5 +161,5 @@ User Query ──► FastAPI ──► LangGraph ──► MongoDB (load context
 
 | Key | Provider | Used by |
 |---|---|---|
-| `CEREBRAS_API_KEY` | Cerebras | Workers (ingestion) + agents (contradiction node) |
-| `GROQ_API_KEY` | Groq | Agents (all reasoning nodes) |
+| `CEREBRAS_API_KEY` | Cerebras | Workers (ingestion only) |
+| `GROQ_API_KEY` | Groq | Agents (all query types) |

@@ -53,9 +53,9 @@ EXTRACTION_TYPE_MAP = {
     QueryType.EXTRACT_DECISIONS: "decisions",
 }
 
-# Maps query type to the DuckDB claim_type used as seed data (Fix 3b)
+# Maps query type to the DuckDB claim_type used as seed data.
+# EXTRACT_ENTITIES has no seed — metric seeds caused the LLM to output metrics instead of entities.
 CLAIM_TYPE_MAP = {
-    QueryType.EXTRACT_ENTITIES: "metric",
     QueryType.EXTRACT_RISKS: "risk_factor",
     QueryType.EXTRACT_DECISIONS: "commitment",
 }
