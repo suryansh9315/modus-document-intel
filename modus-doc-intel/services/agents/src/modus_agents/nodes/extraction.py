@@ -85,6 +85,20 @@ async def extraction_node(state: AgentState) -> AgentState:
         section_context[:32_000],   # First 32K chars of L1 (was 8K)
     ]))
 
+    # EXTRACT_ENTITIES seeds from the entities table (typed named entities)
+    if query.query_type == QueryType.EXTRACT_ENTITIES:
+        try:
+            from modus_workers.tasks.duckdb_write import get_entities_for_extraction
+            seed_entities = get_entities_for_extraction(doc.doc_id)
+            if seed_entities:
+                seed_lines = "\n".join(
+                    f"- {e['name']} [{e['entity_type']}]"
+                    for e in seed_entities[:50]
+                )
+                context = f"PRE-EXTRACTED CANDIDATES:\n{seed_lines}\n\n---\n\n{context}"
+        except Exception:
+            pass  # graceful degradation — extraction still runs without seeds
+
     # Fix 3b: Seed extraction with pre-extracted DuckDB claims so the LLM
     # refines and augments rather than starting from scratch.
     seed_claim_type = CLAIM_TYPE_MAP.get(query.query_type)

@@ -148,6 +148,8 @@ def run_duckdb_write(summary_dicts: list[dict], db_path: str | None = None) -> i
 
     summaries = [SectionSummary(**d) for d in summary_dicts]
     count = duckdb_write.write_section_claims(summaries, db_path)
+    entity_count = duckdb_write.write_section_entities(summaries, db_path)
+    logger.info(f"DuckDB: {entity_count} entities written")
     return count
 
 

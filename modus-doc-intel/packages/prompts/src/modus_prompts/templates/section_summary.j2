@@ -5,6 +5,7 @@ CRITICAL RULES:
 1. Numbers, percentages, and dates MUST be copied EXACTLY — never round, estimate, or paraphrase them.
 2. Every claim must be traceable. Include the exact quoted text for metrics.
 3. Output ONLY valid JSON matching the schema below — no markdown fences, no extra text.
+4. key_entities MUST include entity type. Types: PERSON (executives, directors), ORG (subsidiaries, regulators, partners), PRODUCT (financial products, schemes), REGULATION (laws, guidelines, acts), LOCATION (countries, cities). Do NOT include financial metrics.
 
 SECTION TEXT:
 {{ section_text }}
@@ -15,7 +16,9 @@ OUTPUT JSON SCHEMA:
   "key_metrics": {
     "<metric name>": "<exact value with units>"
   },
-  "key_entities": ["<entity name>", ...],
+  "key_entities": [
+    {"name": "<entity name>", "type": "<PERSON|ORG|PRODUCT|REGULATION|LOCATION>"}
+  ],
   "key_risks": ["<risk description>", ...],
   "claims": [
     {

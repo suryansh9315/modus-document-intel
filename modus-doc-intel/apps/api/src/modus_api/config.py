@@ -26,8 +26,9 @@ class Settings(BaseSettings):
     # File storage
     upload_dir: str = "/data/uploads"
 
-    # CORS — override via CORS_ORIGINS env var (comma-separated) in production
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
+    # CORS — comma-separated string, split at use time to avoid pydantic-settings
+    # JSON-parsing list[str] fields before validators can run
+    cors_origins: str = "http://localhost:3000,http://localhost:3001"
 
     # Token budget for query agents
     token_budget: int = 120_000

@@ -151,15 +151,20 @@ def _merge_chunk_data(
         if isinstance(raw, dict):
             all_metrics.update({k: str(v) for k, v in raw.items() if v is not None})
 
-    # key_entities: deduplicated union preserving order
+    # key_entities: deduplicated union preserving order and type
     seen_entities: set[str] = set()
-    key_entities: list[str] = []
+    key_entities: list[dict] = []
     for d in chunk_data_list:
         for item in (d.get("key_entities") or []):
-            name = item["name"] if isinstance(item, dict) else str(item)
-            if name not in seen_entities:
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+                etype = str(item.get("type") or "UNKNOWN").strip().upper()
+            else:
+                name = str(item).strip()
+                etype = "UNKNOWN"
+            if name and name not in seen_entities:
                 seen_entities.add(name)
-                key_entities.append(name)
+                key_entities.append({"name": name, "type": etype})
 
     # key_risks: deduplicated union preserving order
     seen_risks: set[str] = set()

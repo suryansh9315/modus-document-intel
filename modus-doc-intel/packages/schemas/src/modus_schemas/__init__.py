@@ -119,8 +119,22 @@ class SectionSummary(BaseModel):
     doc_id: str
     summary_text: str
     key_metrics: dict[str, str] = Field(default_factory=dict)  # never paraphrased
-    key_entities: list[str] = Field(default_factory=list)
+    key_entities: list[dict] = Field(default_factory=list)
     key_risks: list[str] = Field(default_factory=list)
+
+    @field_validator("key_entities", mode="before")
+    @classmethod
+    def coerce_key_entities(cls, v: object) -> list[dict]:
+        """Coerce old list[str] format (pre-Tier2 MongoDB docs) to list[dict]."""
+        if not isinstance(v, list):
+            return []
+        result = []
+        for item in v:
+            if isinstance(item, dict):
+                result.append(item)
+            elif isinstance(item, str):
+                result.append({"name": item, "type": "UNKNOWN"})
+        return result
     claims: list[ExtractedClaim] = Field(default_factory=list)
 
 

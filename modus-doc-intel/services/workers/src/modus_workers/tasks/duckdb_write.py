@@ -176,6 +176,48 @@ def write_section_claims(
     return write_claims(all_claims, db_path)
 
 
+def write_section_entities(
+    summaries: list[SectionSummary], db_path: str | None = None
+) -> int:
+    """Convert SectionSummary.key_entities to ExtractedEntity and write to DuckDB."""
+    all_entities: list[ExtractedEntity] = []
+    for s in summaries:
+        base_page = min((c.page_number for c in s.claims), default=0)
+        for item in s.key_entities:
+            name = item.get("name", "") if isinstance(item, dict) else str(item)
+            etype = item.get("type", "UNKNOWN") if isinstance(item, dict) else "UNKNOWN"
+            if not name:
+                continue
+            all_entities.append(ExtractedEntity(
+                doc_id=s.doc_id,
+                section_id=s.section_id,
+                entity_type=etype,
+                name=name,
+                normalized=name.lower().strip(),
+                page_numbers=[base_page] if base_page else [],
+            ))
+    return write_entities(all_entities, db_path)
+
+
+def get_entities_for_extraction(
+    doc_id: str, db_path: str | None = None
+) -> list[dict]:
+    """Get all named entities for a document, ordered by entity_type then name."""
+    path = db_path or get_duckdb_path()
+    con = duckdb.connect(path, read_only=True)
+    try:
+        results = con.execute(
+            "SELECT name, entity_type, page_numbers "
+            "FROM entities WHERE doc_id = ? "
+            "ORDER BY entity_type, name",
+            [doc_id],
+        ).fetchall()
+        cols = ["name", "entity_type", "page_numbers"]
+        return [dict(zip(cols, row)) for row in results]
+    finally:
+        con.close()
+
+
 def query_contradictions(
     doc_id: str, db_path: str | None = None
 ) -> list[dict]:
