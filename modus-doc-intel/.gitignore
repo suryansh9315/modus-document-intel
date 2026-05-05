@@ -20,7 +20,6 @@ venv/
 
 # uv
 .uv/
-uv.lock
 
 # Data (never commit PDFs or database files)
 /data/
