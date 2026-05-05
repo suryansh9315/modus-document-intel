@@ -5,7 +5,9 @@ Critical: financial tables are serialized as markdown to prevent number hallucin
 """
 from __future__ import annotations
 
+import concurrent.futures
 import logging
+import threading
 from pathlib import Path
 
 import pdfplumber
@@ -16,15 +18,18 @@ logger = logging.getLogger(__name__)
 
 # Lazy-loaded docTR singleton (avoid import cost when not needed)
 _doctr_model = None
+_doctr_lock = threading.Lock()
 
 
 def _get_doctr_model():
     global _doctr_model
     if _doctr_model is None:
-        from doctr.models import ocr_predictor
-        logger.info("Loading docTR model (first use)...")
-        _doctr_model = ocr_predictor(pretrained=True)
-        logger.info("docTR model loaded.")
+        with _doctr_lock:
+            if _doctr_model is None:
+                from doctr.models import ocr_predictor
+                logger.info("Loading docTR model (first use)...")
+                _doctr_model = ocr_predictor(pretrained=True)
+                logger.info("docTR model loaded.")
     return _doctr_model
 
 
@@ -118,27 +123,25 @@ def _run_doctr(pdf_path: str, page_no: int) -> PageOCR:
 
 
 def extract_all_pages(pdf_path: str) -> list[PageOCR]:
-    """Extract text from all pages of a PDF."""
+    """Extract text from all pages of a PDF in parallel."""
     pdf_path = str(pdf_path)
     with pdfplumber.open(pdf_path) as pdf:
         total_pages = len(pdf.pages)
 
-    results: list[PageOCR] = []
-    for i in range(total_pages):
+    def _safe_extract(i: int) -> PageOCR:
         try:
-            page_ocr = extract_page(pdf_path, i)
-            results.append(page_ocr)
-            if (i + 1) % 10 == 0:
-                logger.info(f"OCR progress: {i + 1}/{total_pages} pages")
+            return extract_page(pdf_path, i)
         except Exception as e:
             logger.error(f"Failed to OCR page {i}: {e}")
-            # Insert empty page to preserve page number alignment
-            results.append(
-                PageOCR(
-                    page_number=i,
-                    raw_text="[OCR ERROR]",
-                    confidence=0.0,
-                    ocr_engine="pdfplumber",
-                )
+            return PageOCR(
+                page_number=i,
+                raw_text="[OCR ERROR]",
+                confidence=0.0,
+                ocr_engine="pdfplumber",
             )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(_safe_extract, range(total_pages)))
+
+    logger.info(f"OCR complete: {total_pages} pages processed in parallel")
     return results

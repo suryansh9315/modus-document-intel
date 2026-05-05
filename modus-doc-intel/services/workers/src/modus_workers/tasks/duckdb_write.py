@@ -47,7 +47,6 @@ def init_schema(db_path: str | None = None) -> None:
                     claim_type  VARCHAR,
                     subject     VARCHAR,
                     value       VARCHAR,
-                    fiscal_year VARCHAR,
                     confidence  FLOAT
                 )
             """)
@@ -94,7 +93,6 @@ def write_claims(claims: list[ExtractedClaim], db_path: str | None = None) -> in
                     c.claim_type,
                     c.subject.lower().strip(),  # normalize for contradiction detection
                     c.value,
-                    c.fiscal_year,
                     c.confidence,
                 )
                 for c in claims
@@ -104,8 +102,8 @@ def write_claims(claims: list[ExtractedClaim], db_path: str | None = None) -> in
                 """
                 INSERT OR REPLACE INTO claims
                 (claim_id, doc_id, section_id, page_number, claim_text,
-                 claim_type, subject, value, fiscal_year, confidence)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 claim_type, subject, value, confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -153,8 +151,28 @@ def write_entities(entities: list[ExtractedEntity], db_path: str | None = None) 
 def write_section_claims(
     summaries: list[SectionSummary], db_path: str | None = None
 ) -> int:
-    """Extract and write all claims from a batch of section summaries."""
+    """Extract and write all claims from a batch of section summaries.
+
+    Also synthesizes metric claims from key_metrics dicts so the contradiction
+    self-join has consistent subject strings to match on across sections.
+    """
     all_claims = [c for s in summaries for c in s.claims]
+
+    for s in summaries:
+        base_page = min((c.page_number for c in s.claims), default=0)
+        for key, val in s.key_metrics.items():
+            if val:
+                all_claims.append(ExtractedClaim(
+                    doc_id=s.doc_id,
+                    section_id=s.section_id,
+                    page_number=base_page,
+                    claim_text=f"{key}: {val}",
+                    claim_type="metric",
+                    subject=key.lower().strip(),
+                    value=val,
+                    confidence=1.0,
+                ))
+
     return write_claims(all_claims, db_path)
 
 
@@ -181,9 +199,7 @@ def query_contradictions(
                 b.page_number AS page_b,
                 a.subject,
                 a.value AS value_a,
-                b.value AS value_b,
-                a.fiscal_year AS fiscal_year_a,
-                b.fiscal_year AS fiscal_year_b
+                b.value AS value_b
             FROM claims a
             JOIN claims b
               ON a.doc_id = b.doc_id
@@ -201,9 +217,27 @@ def query_contradictions(
         columns = [
             "claim_a_text", "claim_b_text", "section_a_id", "section_b_id",
             "page_a", "page_b", "subject", "value_a", "value_b",
-            "fiscal_year_a", "fiscal_year_b",
         ]
         return [dict(zip(columns, row)) for row in results]
+    finally:
+        con.close()
+
+
+def get_claims_by_type(
+    doc_id: str, claim_type: str, db_path: str | None = None
+) -> list[dict]:
+    """Get all claims of a specific type for a document, ordered by confidence."""
+    path = db_path or get_duckdb_path()
+    con = duckdb.connect(path, read_only=True)
+    try:
+        results = con.execute(
+            "SELECT claim_text, subject, value, page_number, section_id "
+            "FROM claims WHERE doc_id = ? AND claim_type = ? "
+            "ORDER BY confidence DESC",
+            [doc_id, claim_type],
+        ).fetchall()
+        cols = ["claim_text", "subject", "value", "page_number", "section_id"]
+        return [dict(zip(cols, row)) for row in results]
     finally:
         con.close()
 
@@ -219,7 +253,7 @@ def get_claims_for_doc(doc_id: str, db_path: str | None = None) -> list[dict]:
         ).fetchall()
         columns = [
             "claim_id", "doc_id", "section_id", "page_number", "claim_text",
-            "claim_type", "subject", "value", "fiscal_year", "confidence",
+            "claim_type", "subject", "value", "confidence",
         ]
         return [dict(zip(columns, row)) for row in results]
     finally:

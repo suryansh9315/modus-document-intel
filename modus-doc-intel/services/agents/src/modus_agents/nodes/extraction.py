@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from modus_prompts import PromptRegistry
 from modus_schemas import AgentState, QueryType
@@ -14,10 +15,49 @@ from modus_agents.llm import get_groq_client, FAST_MODEL
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_json_response(raw: str) -> dict:
+    """
+    Parse a JSON response from the LLM, handling common wrapping patterns.
+    Some models return JSON wrapped in markdown code fences despite json_object mode.
+    """
+    # Try direct parse first
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Strip markdown code fences: ```json ... ``` or ``` ... ```
+    cleaned = raw.strip()
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", cleaned)
+    if fence_match:
+        try:
+            return json.loads(fence_match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # Find the first {...} block in the string
+    brace_match = re.search(r"\{[\s\S]+\}", cleaned)
+    if brace_match:
+        try:
+            return json.loads(brace_match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    raise json.JSONDecodeError("No valid JSON found", raw, 0)
+
+
 EXTRACTION_TYPE_MAP = {
     QueryType.EXTRACT_ENTITIES: "entities",
     QueryType.EXTRACT_RISKS: "risks",
     QueryType.EXTRACT_DECISIONS: "decisions",
+}
+
+# Maps query type to the DuckDB claim_type used as seed data (Fix 3b)
+CLAIM_TYPE_MAP = {
+    QueryType.EXTRACT_ENTITIES: "metric",
+    QueryType.EXTRACT_RISKS: "risk_factor",
+    QueryType.EXTRACT_DECISIONS: "commitment",
 }
 
 
@@ -28,17 +68,38 @@ async def extraction_node(state: AgentState) -> AgentState:
     """
     client = get_groq_client()
     query = state["query"]
+    doc = state["doc"]
 
     extraction_type = EXTRACTION_TYPE_MAP.get(query.query_type, "entities")
 
-    # Compose context from available levels
-    section_context = state.get("_section_context", "")     # type: ignore[attr-defined]
-    cluster_context = state.get("_cluster_context", "")     # type: ignore[attr-defined]
-    global_context = state.get("_global_context", "")       # type: ignore[attr-defined]
+    # Compose context from available levels.
+    # Fix 4: remove hard truncations — L3 and L2 are already compressed digests
+    # and are well within the model's context budget for extraction tasks.
+    section_context = state.get("_section_context", "")
+    cluster_context = state.get("_cluster_context", "")
+    global_context = state.get("_global_context", "")
 
-    context = "\n\n".join(
-        filter(None, [global_context[:1000], cluster_context[:3000], section_context[:8000]])
-    )
+    context = "\n\n".join(filter(None, [
+        global_context,             # Full L3 (~800 tokens)
+        cluster_context,            # Full L2 (~5-15K tokens)
+        section_context[:32_000],   # First 32K chars of L1 (was 8K)
+    ]))
+
+    # Fix 3b: Seed extraction with pre-extracted DuckDB claims so the LLM
+    # refines and augments rather than starting from scratch.
+    seed_claim_type = CLAIM_TYPE_MAP.get(query.query_type)
+    if seed_claim_type:
+        try:
+            from modus_workers.tasks.duckdb_write import get_claims_by_type
+            seed_claims = get_claims_by_type(doc.doc_id, seed_claim_type)
+            if seed_claims:
+                seed_lines = "\n".join(
+                    f"- {c['subject']}: {c['value'] or c['claim_text'][:120]} [p.{c['page_number']}]"
+                    for c in seed_claims[:50]  # cap at 50 seed items
+                )
+                context = f"PRE-EXTRACTED CANDIDATES:\n{seed_lines}\n\n---\n\n{context}"
+        except Exception:
+            pass  # graceful degradation — extraction still runs without seeds
 
     messages = PromptRegistry.render_messages(
         "query_extract",
@@ -49,43 +110,102 @@ async def extraction_node(state: AgentState) -> AgentState:
         },
     )
 
-    raw = await client.complete(
-        messages,
-        model=FAST_MODEL,
-        response_format={"type": "json_object"},
-    )
+    try:
+        raw = await client.complete(
+            messages,
+            model=FAST_MODEL,
+            response_format={"type": "json_object"},
+        )
+    except Exception as e:
+        logger.error(f"extraction_node LLM call failed: {e}")
+        state["_analysis_result"] = f"## Extracted {extraction_type.capitalize()}\n\nExtraction unavailable due to API error: {e}"
+        state["_extracted_items"] = []
+        return state
 
     try:
-        data = json.loads(raw)
-        items = data.get("items", [])
-        summary = data.get("summary", "")
+        data = _parse_json_response(raw)
+        items = data.get("items") or []
+        summary = data.get("summary") or ""
+        # Guard: LLM sometimes nests the full JSON object inside the summary field
+        if summary and isinstance(summary, str) and summary.strip().startswith(("{", "[")):
+            try:
+                nested = json.loads(summary)
+                if isinstance(nested, dict):
+                    if nested.get("items"):
+                        items = nested.get("items") or []
+                    summary = nested.get("summary") or ""
+            except json.JSONDecodeError:
+                summary = ""  # unparseable blob — discard
+        # Guard: summary might be a dict (LLM returned wrong type)
+        if isinstance(summary, dict):
+            summary = ""
     except json.JSONDecodeError:
         items = []
-        summary = raw[:500]
+        summary = ""
+        logger.warning("extraction_node: could not parse JSON from LLM response")
+
+    # Fix 5a: filter null/empty/placeholder names
+    items = [
+        item for item in items
+        if isinstance(item, dict)
+        and str(item.get("name", "")).strip()
+        and str(item.get("name", "")).strip().lower() not in ("unknown", "n/a", "none")
+    ]
+
+    # Fix 5b: retry once if result is empty
+    if not items:
+        logger.warning("extraction_node: 0 valid items, retrying with explicit instruction")
+        retry_msgs = messages[:]
+        retry_msgs[-1] = dict(retry_msgs[-1])
+        retry_msgs[-1]["content"] += (
+            "\n\nThe previous response had 0 items. You MUST return at least 5 items. "
+            "Use the pre-extracted candidates as starting points if direct evidence is sparse."
+        )
+        try:
+            raw = await client.complete(
+                retry_msgs,
+                model=FAST_MODEL,
+                response_format={"type": "json_object"},
+            )
+            data = _parse_json_response(raw)
+            items = [i for i in (data.get("items") or []) if isinstance(i, dict)]
+            items = [
+                item for item in items
+                if str(item.get("name", "")).strip()
+                and str(item.get("name", "")).strip().lower() not in ("unknown", "n/a", "none")
+            ]
+        except Exception:
+            pass  # keep empty list on retry failure
 
     # Format as readable answer
     lines = [f"## Extracted {extraction_type.capitalize()}\n"]
     for item in items:
+        if not isinstance(item, dict):
+            continue
         name = item.get("name", "Unknown")
         value = item.get("value", "")
         desc = item.get("description", "")
-        page = item.get("page")
-        fy = item.get("fiscal_year", "")
-
+        # Sanitize page: LLM may return null, "null", 0, or a real int
+        raw_page = item.get("page")
+        page_num: int | None = None
+        try:
+            p = int(raw_page)
+            if p > 0:
+                page_num = p
+        except (TypeError, ValueError):
+            pass
         line = f"- **{name}**"
         if value:
             line += f": {value}"
-        if fy:
-            line += f" ({fy})"
         if desc:
             line += f" — {desc}"
-        if page:
-            line += f" [p.{page}]"
+        if page_num:
+            line += f" [p.{page_num}]"
         lines.append(line)
 
     if summary:
         lines.append(f"\n**Summary:** {summary}")
 
-    state["_analysis_result"] = "\n".join(lines)  # type: ignore[typeddict-unknown-key]
-    state["_extracted_items"] = items               # type: ignore[typeddict-unknown-key]
+    state["_analysis_result"] = "\n".join(lines)
+    state["_extracted_items"] = items
     return state

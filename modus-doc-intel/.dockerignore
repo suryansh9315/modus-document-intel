@@ -1,0 +1,24 @@
+# Version control
+.git
+.gitignore
+
+# Python
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/*.egg-info
+
+# Node / Next.js
+apps/web/node_modules
+apps/web/.next
+
+# Dev/test artifacts
+eval/results_*.json
+scripts/__pycache__
+**/.DS_Store
+
+# Docs (not needed in image)
+docs/
+README.md

@@ -7,7 +7,11 @@ import uuid
 from enum import Enum
 from typing import Any, Literal, TypedDict
 
-from pydantic import BaseModel, Field
+import logging
+
+from pydantic import BaseModel, Field, field_validator
+
+_schema_logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -72,17 +76,27 @@ class SectionBoundary(BaseModel):
 # Claims / Entities (fuel for contradiction detection)
 # ---------------------------------------------------------------------------
 
+_VALID_CLAIM_TYPES = {"metric", "statement", "commitment", "risk_factor", "constraint"}
+
+
 class ExtractedClaim(BaseModel):
     claim_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     doc_id: str
     section_id: str
     page_number: int
     claim_text: str
-    claim_type: Literal["metric", "statement", "commitment", "risk_factor"]
+    claim_type: Literal["metric", "statement", "commitment", "risk_factor", "constraint"]
     subject: str  # normalized, e.g. "Net Interest Margin"
     value: str | None = None  # e.g. "4.27%"
-    fiscal_year: str | None = None  # e.g. "FY2024"
     confidence: float = 1.0
+
+    @field_validator("claim_type", mode="before")
+    @classmethod
+    def coerce_claim_type(cls, v: object) -> str:
+        if v not in _VALID_CLAIM_TYPES:
+            _schema_logger.warning(f"Unknown claim_type {v!r}, coercing to 'statement'")
+            return "statement"
+        return v  # type: ignore[return-value]
 
 
 class ExtractedEntity(BaseModel):
@@ -117,6 +131,7 @@ class ClusterDigest(BaseModel):
     digest_text: str
     section_ids: list[str] = Field(default_factory=list)
     cluster_index: int = 0
+    consolidated_metrics: dict[str, str] = Field(default_factory=dict)  # P2-2
 
 
 class GlobalDigest(BaseModel):
@@ -124,6 +139,8 @@ class GlobalDigest(BaseModel):
     doc_id: str
     digest_text: str
     executive_summary: str  # ~300 tokens
+    top_metrics: dict[str, str] = Field(default_factory=dict)   # P2-1
+    top_risks: list[str] = Field(default_factory=list)           # P2-1
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +218,12 @@ class AgentState(TypedDict):
     sources: list[dict[str, Any]]
     contradictions: list[ContradictionReport]
     route: str  # internal routing decision
+    # Private keys passed between nodes (must be declared for LangGraph to track them)
+    _global_context: str
+    _cluster_context: str
+    _section_context: str
+    _analysis_result: str
+    _extracted_items: list[dict[str, Any]]
 
 
 # ---------------------------------------------------------------------------

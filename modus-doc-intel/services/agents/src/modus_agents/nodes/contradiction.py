@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import uuid
 
 from modus_prompts import PromptRegistry
 from modus_schemas import AgentState, ContradictionReport
-from modus_agents.llm import get_groq_client, PRIMARY_MODEL
+from modus_agents.llm import get_groq_client, FAST_MODEL, PRIMARY_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -21,42 +20,8 @@ logger = logging.getLogger(__name__)
 def _get_contradiction_candidates(doc_id: str) -> list[dict]:
     """Query DuckDB for potential contradictions (thread-safe read-only)."""
     try:
-        import duckdb
-        db_path = os.environ.get("DUCKDB_PATH", "/data/modus.duckdb")
-        con = duckdb.connect(db_path, read_only=True)
-        try:
-            results = con.execute(
-                """
-                SELECT
-                    a.claim_text AS claim_a_text,
-                    b.claim_text AS claim_b_text,
-                    a.section_id AS section_a_id,
-                    b.section_id AS section_b_id,
-                    a.page_number AS page_a,
-                    b.page_number AS page_b,
-                    a.subject,
-                    a.value AS value_a,
-                    b.value AS value_b
-                FROM claims a
-                JOIN claims b
-                  ON a.doc_id = b.doc_id
-                 AND a.subject = b.subject
-                 AND a.claim_id < b.claim_id
-                 AND a.value IS NOT NULL
-                 AND b.value IS NOT NULL
-                 AND a.value != b.value
-                WHERE a.doc_id = ?
-                LIMIT 50
-                """,
-                [doc_id],
-            ).fetchall()
-            columns = [
-                "claim_a_text", "claim_b_text", "section_a_id", "section_b_id",
-                "page_a", "page_b", "subject", "value_a", "value_b",
-            ]
-            return [dict(zip(columns, row)) for row in results]
-        finally:
-            con.close()
+        from modus_workers.tasks.duckdb_write import query_contradictions
+        return query_contradictions(doc_id)
     except Exception as e:
         logger.error(f"DuckDB contradiction query failed: {e}")
         return []
@@ -84,6 +49,24 @@ async def contradiction_node(state: AgentState) -> AgentState:
         state["contradictions"] = []
         return state
 
+    # Fix 7: Sort candidates by topic relevance before slicing to top 20.
+    # The DuckDB query returns results ordered alphabetically by subject, which
+    # means alphabetically-late subjects may be excluded by the [:20] cap.
+    # Re-sorting by question keyword overlap ensures the most relevant subjects
+    # surface first.
+    _STOP = {"the", "a", "an", "are", "is", "do", "in", "of", "any", "all",
+             "and", "or", "to", "what", "how", "does", "there", "across"}
+    question_words = {
+        w.lower().strip("?.,") for w in query.question.split()
+        if len(w) > 3 and w.lower() not in _STOP
+    }
+
+    def _relevance_score(c: dict) -> int:
+        subject_words = set(c.get("subject", "").lower().replace("_", " ").split())
+        return len(question_words & subject_words)
+
+    candidates.sort(key=_relevance_score, reverse=True)
+
     # Format candidates for LLM
     candidate_text_parts = []
     for i, c in enumerate(candidates[:20]):  # limit to top 20
@@ -93,7 +76,7 @@ async def contradiction_node(state: AgentState) -> AgentState:
             f"   Claim B (p.{c['page_b']}): {c['claim_b_text'][:200]}"
         )
 
-    section_context = state.get("_section_context", "")[:3000]  # type: ignore[attr-defined]
+    section_context = state.get("_section_context", "")[:3000]
 
     messages = PromptRegistry.render_messages(
         "query_detect_contradictions",
@@ -104,37 +87,54 @@ async def contradiction_node(state: AgentState) -> AgentState:
         },
     )
 
-    raw = await client.complete(
-        messages,
-        model=PRIMARY_MODEL,
-        response_format={"type": "json_object"},
-    )
+    try:
+        raw = await client.complete(
+            messages,
+            model=FAST_MODEL,
+            response_format={"type": "json_object"},
+        )
+    except Exception as e:
+        logger.error(f"contradiction_node LLM call failed: {e}")
+        state["_analysis_result"] = f"## Contradiction Analysis\n\nAnalysis unavailable due to API error: {e}"
+        state["contradictions"] = []
+        return state
 
     contradictions: list[ContradictionReport] = []
     analysis_text = ""
 
     try:
         data = json.loads(raw)
-        analysis_text = data.get("summary", "")
+        analysis_text = data.get("summary") or ""
 
-        for item in data.get("contradictions", []):
+        for item in (data.get("contradictions") or []):
+            if not isinstance(item, dict):
+                continue
             if not item.get("is_genuine_contradiction"):
                 continue
+            raw_severity = item.get("severity", "medium")
+            severity = raw_severity if raw_severity in {"low", "medium", "high"} else "medium"
+
+            def _safe_page(val) -> int:
+                try:
+                    return max(0, int(val))
+                except (TypeError, ValueError):
+                    return 0
+
             report = ContradictionReport(
                 contradiction_id=str(uuid.uuid4()),
-                subject=item.get("subject", "Unknown"),
-                claim_a_text=item.get("claim_a", ""),
-                claim_a_section=item.get("claim_a_section", ""),
-                claim_a_page=int(item.get("claim_a_page", 0)),
-                claim_b_text=item.get("claim_b", ""),
-                claim_b_section=item.get("claim_b_section", ""),
-                claim_b_page=int(item.get("claim_b_page", 0)),
-                explanation=item.get("explanation", ""),
-                severity=item.get("severity", "medium"),
+                subject=item.get("subject") or "Unknown",
+                claim_a_text=item.get("claim_a") or "",
+                claim_a_section=item.get("claim_a_section") or "",
+                claim_a_page=_safe_page(item.get("claim_a_page")),
+                claim_b_text=item.get("claim_b") or "",
+                claim_b_section=item.get("claim_b_section") or "",
+                claim_b_page=_safe_page(item.get("claim_b_page")),
+                explanation=item.get("explanation") or "",
+                severity=severity,
             )
             contradictions.append(report)
 
-    except (json.JSONDecodeError, ValueError, KeyError) as e:
+    except (json.JSONDecodeError, KeyError) as e:
         logger.error(f"Contradiction classification failed: {e}")
         analysis_text = raw[:1000]
 
@@ -156,14 +156,17 @@ async def contradiction_node(state: AgentState) -> AgentState:
             lines.append(f"\n**Overall Assessment:** {analysis_text}")
         analysis = "\n".join(lines)
     else:
+        default_assessment = (
+            "All differences are attributable to different time periods, "
+            "methodologies, or rounding."
+        )
         analysis = (
             f"## Contradiction Analysis\n\n"
             f"Reviewed {len(candidates)} potential contradictions. "
-            f"No genuine contradictions found — all differences are "
-            f"attributable to different time periods, methodologies, or rounding.\n\n"
-            f"**Assessment:** {analysis_text}"
+            f"No genuine contradictions found.\n\n"
+            f"**Assessment:** {analysis_text or default_assessment}"
         )
 
-    state["_analysis_result"] = analysis  # type: ignore[typeddict-unknown-key]
+    state["_analysis_result"] = analysis
     state["contradictions"] = contradictions
     return state

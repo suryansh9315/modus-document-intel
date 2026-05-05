@@ -4,12 +4,11 @@ import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { getDocument, getIngestionStatus } from "@/lib/api";
-import { DocumentRecord, DocumentStatus, ContradictionReport, QueryType } from "@/lib/types";
+import { DocumentRecord, ContradictionReport } from "@/lib/types";
 import { SectionTree } from "@/components/section-tree";
 import { QueryPanel } from "@/components/query-panel";
 import { AnswerDisplay } from "@/components/answer-display";
 import { IngestionProgress } from "@/components/ingestion-progress";
-import { ContradictionViewer } from "@/components/contradiction-viewer";
 
 const POLL_INTERVAL = 3000; // 3s
 
@@ -24,7 +23,7 @@ export default function DocumentPage() {
   const [streaming, setStreaming] = useState(false);
   const [contradictions, setContradictions] = useState<ContradictionReport[]>([]);
   const [selectedSection, setSelectedSection] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"query" | "sections" | "contradictions">("query");
+  const [activeTab, setActiveTab] = useState<"query" | "sections">("query");
 
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -65,7 +64,6 @@ export default function DocumentPage() {
 
   function handleContradictions(items: ContradictionReport[]) {
     setContradictions(items);
-    if (items.length > 0) setActiveTab("contradictions");
   }
 
   if (loading) {
@@ -124,7 +122,7 @@ export default function DocumentPage() {
           {/* Left: sections + tabs */}
           <div className="lg:col-span-1 space-y-4">
             <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
-              {(["query", "sections", "contradictions"] as const).map((tab) => (
+              {(["query", "sections"] as const).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -135,11 +133,6 @@ export default function DocumentPage() {
                   }`}
                 >
                   {tab}
-                  {tab === "contradictions" && contradictions.length > 0 && (
-                    <span className="ml-1 bg-red-500 text-white text-[10px] rounded-full px-1.5">
-                      {contradictions.length}
-                    </span>
-                  )}
                 </button>
               ))}
             </div>
@@ -164,9 +157,6 @@ export default function DocumentPage() {
               />
             )}
 
-            {activeTab === "contradictions" && (
-              <ContradictionViewer contradictions={contradictions} />
-            )}
           </div>
 
           {/* Right: answer display */}

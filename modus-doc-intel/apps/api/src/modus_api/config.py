@@ -17,11 +17,8 @@ class Settings(BaseSettings):
     # DuckDB
     duckdb_path: str = "/data/modus.duckdb"
 
-    # Groq
-    groq_api_key: str = ""
-
-    # Prefect
-    prefect_api_url: str = "http://127.0.0.1:4200/api"
+    # Cerebras
+    cerebras_api_key: str = ""
 
     # File storage
     upload_dir: str = "/data/uploads"

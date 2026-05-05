@@ -37,8 +37,6 @@ services:
       REDIS_URL: redis://redis:6379
       DUCKDB_PATH: /data/modus.duckdb
       UPLOAD_DIR: /data/uploads
-      PREFECT_SERVER_ALLOW_EPHEMERAL_MODE: "true"
-      PREFECT_API_URL: ""
     volumes:
       - app_data:/data
     depends_on:
@@ -73,6 +71,7 @@ services:
       - "3000:3000"
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000
+      API_URL: http://api:8000
     depends_on:
       - api
 

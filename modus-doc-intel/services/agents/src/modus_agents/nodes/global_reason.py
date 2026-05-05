@@ -21,9 +21,8 @@ async def global_reasoning_node(state: AgentState) -> AgentState:
     client = get_groq_client()
     query = state["query"]
 
-    global_context = state.get("_global_context", "")    # type: ignore[attr-defined]
-    cluster_context = state.get("_cluster_context", "")  # type: ignore[attr-defined]
-    section_context = state.get("_section_context", "")  # type: ignore[attr-defined]
+    global_context = state.get("_global_context", "")
+    cluster_context = state.get("_cluster_context", "")
 
     messages = PromptRegistry.render_messages(
         "query_summarize_full",
@@ -31,10 +30,14 @@ async def global_reasoning_node(state: AgentState) -> AgentState:
             "question": query.question,
             "global_context": global_context or "[Global digest not yet available]",
             "cluster_context": cluster_context or "[Cluster digests not yet available]",
-            "section_context": section_context or "[Section summaries not yet available]",
         },
     )
 
-    analysis = await client.complete(messages, model=PRIMARY_MODEL)
-    state["_analysis_result"] = analysis  # type: ignore[typeddict-unknown-key]
+    try:
+        analysis = await client.complete(messages, model=PRIMARY_MODEL)
+    except Exception as e:
+        logger.error(f"global_reasoning_node LLM call failed: {e}")
+        analysis = f"Summary unavailable due to API error: {e}"
+
+    state["_analysis_result"] = analysis
     return state

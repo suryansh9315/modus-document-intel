@@ -8,6 +8,7 @@ import { uploadDocument } from "@/lib/api";
 export default function UploadPage() {
   const router = useRouter();
   const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -18,12 +19,14 @@ export default function UploadPage() {
     }
     setError(null);
     setUploading(true);
+    setUploadPct(0);
     try {
-      const result = await uploadDocument(file);
+      const result = await uploadDocument(file, setUploadPct);
       router.push(`/documents/${result.doc_id}`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Upload failed");
       setUploading(false);
+      setUploadPct(0);
     }
   }
 
@@ -73,11 +76,29 @@ export default function UploadPage() {
           </svg>
         </div>
 
-        <div className="text-center">
+        <div className="text-center w-full">
           <p className="text-base font-medium text-gray-700">
-            {uploading ? "Uploading..." : "Drop your PDF here"}
+            {!uploading
+              ? "Drop your PDF here"
+              : uploadPct < 100
+              ? `Uploading… ${uploadPct}%`
+              : "Saving to server…"}
           </p>
-          <p className="text-sm text-gray-400 mt-1">or click to browse</p>
+          <p className="text-sm text-gray-400 mt-1">
+            {!uploading
+              ? "or click to browse"
+              : uploadPct < 100
+              ? "Please wait, this may take a while for large files"
+              : "Almost done, preparing document…"}
+          </p>
+          {uploading && (
+            <div className="mt-3 w-full bg-gray-200 rounded-full h-2">
+              <div
+                className={`h-2 rounded-full transition-all duration-300 ${uploadPct < 100 ? "bg-brand-600" : "bg-brand-400 animate-pulse"}`}
+                style={{ width: `${uploadPct < 100 ? uploadPct : 100}%` }}
+              />
+            </div>
+          )}
         </div>
 
         <label className="cursor-pointer">

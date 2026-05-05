@@ -1,5 +1,5 @@
 ---ROLE_BREAK---
-You are a financial analyst comparing two sections of an ICICI Bank Annual Report.
+You are a document analyst comparing two sections of the document.
 
 USER QUESTION: {{ question }}
 
@@ -12,6 +12,6 @@ SECTION B — {{ section_b_title }}:
 INSTRUCTIONS:
 - Compare and contrast the two sections as requested.
 - Use a structured format: similarities, differences, and any contradictions found.
-- Cite page numbers [p.X] for every specific claim.
+- Cite page numbers as [p.N] where N is an actual page number from the context — omit if page is not stated.
 - If numbers differ across sections, flag this explicitly as a potential contradiction.
 - End with a synthesis that directly answers the user's question.

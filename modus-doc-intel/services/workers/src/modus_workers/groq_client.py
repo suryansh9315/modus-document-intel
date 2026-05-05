@@ -1,7 +1,7 @@
 """
-Groq API client using direct httpx (no SDK bloat).
-Supports both sync completion and async streaming.
-Includes retry with exponential backoff for rate limits.
+Cerebras API client using direct httpx (no SDK bloat).
+OpenAI-compatible endpoint. Supports both sync completion and async streaming.
+Includes retry with exponential backoff for transient errors.
 """
 from __future__ import annotations
 
@@ -13,33 +13,34 @@ from typing import AsyncIterator
 
 import httpx
 
-GROQ_BASE = "https://api.groq.com/openai/v1"
-PRIMARY_MODEL = "llama-3.3-70b-versatile"   # 128K ctx, high quality
-FAST_MODEL = "llama-3.1-8b-instant"         # routing, extraction, verification
+CEREBRAS_BASE = "https://api.cerebras.ai/v1"
+PRIMARY_MODEL = "llama3.1-8b"     # 8K context window
+FAST_MODEL = "llama3.1-8b"
 
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 8
 BASE_DELAY = 2.0  # seconds
-MAX_RETRY_DELAY = 60.0  # cap retry-after to avoid 1-hour waits
+MAX_RETRY_DELAY = 60.0  # cap retry-after to a reasonable bound
 
 
 class GroqClient:
     def __init__(self, api_key: str | None = None):
-        key = api_key or os.environ["GROQ_API_KEY"]
+        key = api_key or os.environ["CEREBRAS_API_KEY"]
         self._client = httpx.AsyncClient(
-            base_url=GROQ_BASE,
+            base_url=CEREBRAS_BASE,
             headers={"Authorization": f"Bearer {key}"},
             timeout=120.0,
         )
 
-    async def complete(
+    async def complete_with_usage(
         self,
         messages: list[dict],
         model: str = PRIMARY_MODEL,
         response_format: dict | None = None,
         max_tokens: int = 4096,
-    ) -> str:
+    ) -> tuple[str, int]:
+        """Like complete() but also returns total tokens consumed."""
         payload: dict = {
             "model": model,
             "messages": messages,
@@ -51,20 +52,35 @@ class GroqClient:
         for attempt in range(MAX_RETRIES):
             r = await self._client.post("/chat/completions", json=payload)
             if r.status_code == 429:
-                # Rate limited — extract retry-after or use exponential backoff
                 retry_after = r.headers.get("retry-after")
                 delay = float(retry_after) if retry_after else BASE_DELAY * (2 ** attempt)
-                delay = min(delay, MAX_RETRY_DELAY)  # cap to avoid multi-minute waits
+                delay = min(delay, MAX_RETRY_DELAY)
                 logger.warning(f"Rate limited (429), retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})")
                 await asyncio.sleep(delay)
                 continue
             r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"]
+            body = r.json()
+            content = body["choices"][0]["message"]["content"]
+            tokens = body.get("usage", {}).get("total_tokens", 0)
+            return content, tokens
 
         # Final attempt without catching
         r = await self._client.post("/chat/completions", json=payload)
         r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+        body = r.json()
+        return body["choices"][0]["message"]["content"], body.get("usage", {}).get("total_tokens", 0)
+
+    async def complete(
+        self,
+        messages: list[dict],
+        model: str = PRIMARY_MODEL,
+        response_format: dict | None = None,
+        max_tokens: int = 4096,
+    ) -> str:
+        content, _ = await self.complete_with_usage(
+            messages, model=model, response_format=response_format, max_tokens=max_tokens
+        )
+        return content
 
     async def stream(
         self,

@@ -5,12 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "modus-workers"
 version = "0.1.0"
-description = "Prefect ingestion flows for modus-doc-intel"
+description = "Ingestion pipeline workers for modus-doc-intel"
 requires-python = ">=3.11"
 dependencies = [
     "modus-schemas",
     "modus-prompts",
-    "prefect>=3.0",
     "pdfplumber>=0.11",
     "python-doctr>=0.9",
     "duckdb>=1.0",

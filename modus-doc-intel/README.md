@@ -1,6 +1,8 @@
 # Modus Document Intelligence
 
-Multi-agent AI system for processing large financial PDFs. Built for the ICICI Bank Annual Report (341 pages, ~248K tokens) — demonstrating hierarchical compression, cross-section reasoning, and contradiction detection without RAG or vector databases.
+Multi-agent AI system for processing large scanned documents (~500+ pages). Demonstrates hierarchical compression, cross-section reasoning, and contradiction detection without RAG or vector databases.
+
+The provided sample document is the ICICI Bank Annual Report (341 pages, ~248K tokens), but the system works with any large scanned or text-native PDF.
 
 ## Architecture
 
@@ -9,11 +11,11 @@ PDF → OCR → Segment → L1 Analysis → L2 Cluster → L3 Global
                                 ↓                    ↓
                              DuckDB              MongoDB
                                 ↓                    ↓
-User Query → LangGraph → Context Budget → Groq LLM → SSE → Browser
+User Query → LangGraph → Context Budget → Cerebras LLM → SSE → Browser
 ```
 
 **Two phases:**
-1. **Offline ingestion** (~30-45 min): Prefect orchestrates OCR + segmentation + hierarchical summarization
+1. **Offline ingestion**: Async pipeline runs OCR + segmentation + hierarchical summarization
 2. **Online query** (<10s): LangGraph assembles pre-computed context and routes to specialized agents
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system diagram.
@@ -23,14 +25,14 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system diagram.
 ### Prerequisites
 
 - Docker + Docker Compose
-- A Groq API key (free at [console.groq.com](https://console.groq.com))
+- A Cerebras API key (free at [cloud.cerebras.ai](https://cloud.cerebras.ai))
 
 ### 1. Configure environment
 
 ```bash
 cd modus-doc-intel
 cp .env.example .env
-# Edit .env and add your GROQ_API_KEY
+# Edit .env and add your CEREBRAS_API_KEY
 ```
 
 ### 2. Start infrastructure
@@ -41,15 +43,16 @@ docker compose -f infra/docker-compose.yml up -d
 
 This starts: MongoDB, Redis, FastAPI (port 8000), and Next.js (port 3000).
 
-### 3. Upload and process the ICICI Bank PDF
+### 3. Upload a document
+
+Upload any PDF via the web UI at [http://localhost:3000](http://localhost:3000), or use the seed script for the provided sample:
 
 ```bash
-# From the modus/ directory (where the PDF is)
+# Upload the ICICI Bank Annual Report (sample document)
 python modus-doc-intel/scripts/seed_icici.py
 ```
 
-This uploads the ICICI Bank Report PDF and polls ingestion status.
-**Expect 30-45 minutes** for the full 341-page report.
+Ingestion time scales with document size. The 341-page ICICI report takes approximately 3–5 minutes (OCR + parallel L1 summaries via llama3.1-8b on Cerebras, up to 4 concurrent). Re-uploading the same PDF skips OCR entirely via a local JSON cache.
 
 ### 4. Query the document
 
@@ -58,13 +61,12 @@ Visit [http://localhost:3000](http://localhost:3000) and start querying!
 Or use the API directly:
 
 ```bash
-# Non-streaming query
 curl -X POST http://localhost:8000/queries/ \
   -H "Content-Type: application/json" \
   -d '{
     "doc_id": "<your-doc-id>",
     "query_type": "SUMMARIZE_FULL",
-    "question": "What are the key financial highlights?",
+    "question": "What are the key highlights of this document?",
     "stream": false
   }'
 ```
@@ -96,22 +98,24 @@ npm run dev
 
 | Query Type | Description | Example |
 |---|---|---|
-| `SUMMARIZE_FULL` | Full document summary | "Summarize the annual report" |
-| `SUMMARIZE_SECTION` | Specific section summary | "Summarize Risk Management" |
-| `CROSS_SECTION_COMPARE` | Compare two sections | "Compare capital adequacy across sections" |
+| `SUMMARIZE_FULL` | Full document summary | "Summarize the entire document" |
+| `SUMMARIZE_SECTION` | Specific section summary | "Summarize the Risk Management section" |
+| `CROSS_SECTION_COMPARE` | Compare two sections | "Compare capital adequacy across two sections" |
 | `EXTRACT_ENTITIES` | Extract named entities with values | "List all subsidiaries" |
 | `EXTRACT_RISKS` | Extract risk factors | "What are the top risks?" |
 | `EXTRACT_DECISIONS` | Extract strategic decisions | "What commitments were made?" |
-| `DETECT_CONTRADICTIONS` | Find inconsistencies | "Are there any NPA contradictions?" |
+| `DETECT_CONTRADICTIONS` | Find inconsistencies | "Are there any contradictions in the reported figures?" |
 
 ## Evaluation
 
 ```bash
-# After seeding, run the 20-question golden evaluation
-python scripts/eval.py <doc-id>
+# After seeding the ICICI report, run the 20-question golden evaluation
+python scripts/eval.py <doc-id> http://localhost:8000
 ```
 
 Results saved to `eval/results_<timestamp>.json`.
+
+Baseline accuracy on the 20-question golden set: **6/20 (30%)**. After Phase 1 query-time improvements, target is **≥14/20 (70%)**. Phase 2 re-ingestion improvements push toward 80%+.
 
 ## Project Structure
 
@@ -121,31 +125,34 @@ modus-doc-intel/
 │   ├── schemas/          # Shared Pydantic models
 │   └── prompts/          # Jinja2 prompt templates
 ├── services/
-│   ├── workers/          # Prefect ingestion flows
+│   ├── workers/          # Ingestion pipeline (OCR → L1 → L2 → L3)
 │   └── agents/           # LangGraph query agents
 ├── apps/
 │   ├── api/              # FastAPI gateway
 │   └── web/              # Next.js 15 frontend
 ├── infra/                # Docker + docker-compose
 ├── scripts/              # Seed + eval scripts
-├── eval/                 # Golden Q&A pairs
+├── eval/                 # Golden Q&A pairs (ICICI Bank sample)
 └── docs/                 # Architecture docs
 ```
 
 ## Models Used
 
-- **Llama-3.3-70B-Versatile** (via Groq): Primary reasoning, summarization, contradiction analysis
-- **Llama-3.1-8B-Instant** (via Groq): Fast routing, structured extraction
-- **docTR** (local): OCR for scanned pages
+- **gpt-oss-120b** (via Cerebras): L2/L3 aggregation, contradiction analysis, query synthesis — 128K context
+- **llama3.1-8b** (via Cerebras): L1 per-section summaries, structured extraction (JSON mode) — fast, low-cost
+- **docTR** (local): OCR for scanned/image-only pages
 - **pdfplumber** (local): Text extraction for text-native pages
 
 ## Context Strategy
 
-The full 341-page document (~248K tokens) is compressed ~80× into a hierarchical tree:
-- **L1**: ~1.5K tokens per section
-- **L2**: ~4K tokens per cluster (5-7 sections)
-- **L3**: ~3K tokens for the whole document
+A 341-page document (~248K tokens) is compressed into a hierarchical tree:
+- **L1**: ~300 tokens per section (150–200 word summary + key_metrics + claims). Sections larger than 8K chars are split into overlapping chunks — one LLM call per chunk, results merged — so no content is silently truncated.
+- **L2**: ~4K tokens per cluster (5–7 sections synthesized) + `consolidated_metrics` dict
+- **L3**: ~3K tokens for the whole document (global digest) + `executive_summary` + `top_metrics` + `top_risks`
 
-At query time, the aggregation node loads the right context levels within a **120K token budget** — well under Llama's 128K limit.
+At query time, the aggregation node loads the right context levels within a **120K token budget**. Context assembly is query-type-aware:
+- `EXTRACT_*` queries load sections sorted by content density (most metric-rich first) and seed the LLM with pre-extracted DuckDB claims.
+- `SUMMARIZE_SECTION` loads up to 4 neighboring sections within ±20 pages of the requested section.
+- `DETECT_CONTRADICTIONS` sorts candidates by question-keyword relevance before the top-20 cap.
 
 See [docs/CONTEXT_STRATEGY.md](docs/CONTEXT_STRATEGY.md) for details.

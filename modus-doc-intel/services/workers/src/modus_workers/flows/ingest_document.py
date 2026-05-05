@@ -2,7 +2,7 @@
 Main ingestion flow: PDF → OCR → Segment → L1 → L2 → L3 → MongoDB + DuckDB.
 
 Runs as plain async functions (no Prefect server required).
-Estimated runtime for 341-page ICICI PDF: 30-45 minutes.
+L1 runs up to 4 sections concurrently via Cerebras API (no TPM throttle).
 """
 from __future__ import annotations
 
@@ -48,11 +48,31 @@ async def _update_doc_status(db, doc_id: str, status: DocumentStatus, **kwargs):
 
 
 def run_ocr(pdf_path: str) -> list[dict]:
-    """Extract text from all pages of PDF."""
+    """Extract text from all pages of PDF. Uses JSON cache to skip re-OCR."""
+    import json
+    from pathlib import Path
+
+    pdf_path_obj = Path(pdf_path)
+    cache_path = pdf_path_obj.parent / (pdf_path_obj.stem + "_ocr.json")
+
+    if cache_path.exists():
+        logger.info(f"OCR cache hit: loading pages from {cache_path}")
+        with cache_path.open("r") as f:
+            return json.load(f)
+
     logger.info(f"Starting OCR on {pdf_path}")
     pages = ocr_tasks.extract_all_pages(pdf_path)
-    logger.info(f"OCR complete: {len(pages)} pages")
-    return [p.model_dump() for p in pages]
+    page_dicts = [p.model_dump() for p in pages]
+
+    try:
+        with cache_path.open("w") as f:
+            json.dump(page_dicts, f)
+        logger.info(f"OCR cache written: {cache_path}")
+    except Exception as e:
+        logger.warning(f"Failed to write OCR cache (non-fatal): {e}")
+
+    logger.info(f"OCR complete: {len(page_dicts)} pages")
+    return page_dicts
 
 
 def run_segmentation(page_dicts: list[dict], doc_id: str) -> list[dict]:
@@ -67,18 +87,21 @@ async def run_l1_summaries(
     page_dicts: list[dict],
     boundary_dicts: list[dict],
     doc_id: str,
-) -> list[dict]:
-    """Generate L1 section summaries (parallel Groq calls)."""
+) -> tuple[list[dict], list[dict]]:
+    """Generate L1 section summaries. Returns (summary_dicts, merged_boundary_dicts)."""
     pages = [PageOCR(**d) for d in page_dicts]
     boundaries = [SectionBoundary(**d) for d in boundary_dicts]
 
+    # Merge small sections first so we can capture the merged list for MongoDB
+    merged = summarize_tasks.merge_small_sections(boundaries)
+
     async with GroqClient() as client:
         summaries = await summarize_tasks.generate_l1_batch(
-            boundaries, pages, client
+            merged, pages, client
         )
 
-    logger.info(f"L1 summaries: {len(summaries)} generated")
-    return [s.model_dump() for s in summaries]
+    logger.info(f"L1 summaries: {len(summaries)} generated from {len(merged)} merged sections")
+    return [s.model_dump() for s in summaries], [b.model_dump() for b in merged]
 
 
 async def run_l2_digests(summary_dicts: list[dict], doc_id: str) -> list[dict]:
@@ -145,7 +168,8 @@ async def ingest_document_flow(pdf_path: str, doc_id: str) -> DocumentRecord:
     try:
         # --- Phase 1: OCR ---
         await _update_doc_status(db, doc_id, DocumentStatus.INGESTING)
-        page_dicts = run_ocr(pdf_path)
+        # Run in thread pool to avoid blocking the FastAPI event loop
+        page_dicts = await asyncio.to_thread(run_ocr, pdf_path)
         total_pages = len(page_dicts)
 
         # Update page count
@@ -155,7 +179,7 @@ async def ingest_document_flow(pdf_path: str, doc_id: str) -> DocumentRecord:
 
         # --- Phase 2: Segmentation ---
         await _update_doc_status(db, doc_id, DocumentStatus.SEGMENTING)
-        boundary_dicts = run_segmentation(page_dicts, doc_id)
+        boundary_dicts = await asyncio.to_thread(run_segmentation, page_dicts, doc_id)
 
         # Persist section boundaries
         await db.documents.update_one(
@@ -165,15 +189,20 @@ async def ingest_document_flow(pdf_path: str, doc_id: str) -> DocumentRecord:
 
         # --- Phase 3: L1 Summaries ---
         await _update_doc_status(db, doc_id, DocumentStatus.ANALYZING)
-        summary_dicts = await run_l1_summaries(page_dicts, boundary_dicts, doc_id)
+        summary_dicts, merged_boundary_dicts = await run_l1_summaries(page_dicts, boundary_dicts, doc_id)
 
         await db.documents.update_one(
             {"_id": doc_id},
-            {"$set": {"section_summaries": summary_dicts}},
+            {
+                "$set": {
+                    "section_summaries": summary_dicts,
+                    "section_boundaries": merged_boundary_dicts,
+                }
+            },
         )
 
         # --- Phase 4: Write DuckDB ---
-        claims_count = run_duckdb_write(summary_dicts, duckdb_path)
+        claims_count = await asyncio.to_thread(run_duckdb_write, summary_dicts, duckdb_path)
         logger.info(f"DuckDB: {claims_count} claims written")
 
         # --- Phase 5: L2 Cluster Digests ---

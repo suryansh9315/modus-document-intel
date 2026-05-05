@@ -54,10 +54,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS — allow_origins=["*"] is incompatible with allow_credentials=True (browser spec).
+# Use allow_origin_regex to permit any localhost port for local development while
+# still supporting explicit prod origins from settings.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    allow_origin_regex=r"http://localhost(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

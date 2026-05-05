@@ -1,1 +1,1 @@
-"""Prefect ingestion flows."""
+"""Ingestion pipeline flows."""

@@ -51,7 +51,10 @@ class PromptRegistry:
         parts = rendered.split("---ROLE_BREAK---")
         if len(parts) == 1:
             return [{"role": "user", "content": rendered.strip()}]
+        # Skip empty parts — all templates start with ---ROLE_BREAK--- so parts[0]
+        # is always "" which Cerebras rejects as an invalid empty content string.
         return [
-            {"role": "system", "content": parts[0].strip()},
-            {"role": "user", "content": parts[1].strip()},
+            {"role": r, "content": c.strip()}
+            for r, c in zip(["system", "user"], parts)
+            if c.strip()
         ]

@@ -1,19 +1,19 @@
 """
 Ingestion routes.
 
-POST /ingestion/upload        — upload PDF, create DocumentRecord, trigger Prefect flow
+POST /ingestion/upload        — upload PDF, create DocumentRecord, trigger ingestion pipeline
 GET  /ingestion/{job_id}      — poll ingestion status
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile
 
 from modus_api.config import settings
 from modus_schemas import DocumentRecord, DocumentStatus, IngestionJob
@@ -23,13 +23,13 @@ router = APIRouter()
 
 
 @router.post("/upload")
-async def upload_document(request: Request, file: UploadFile = File(...)):
+async def upload_document(request: Request, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """
     Upload a PDF and trigger background ingestion.
 
     1. Save PDF to upload_dir.
     2. Create DocumentRecord in MongoDB (status=PENDING).
-    3. Trigger Prefect flow in background (non-blocking).
+    3. Trigger ingestion pipeline in background (non-blocking).
     4. Return doc_id and job_id for status polling.
     """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
@@ -38,10 +38,10 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
     db = request.app.state.db
     doc_id = str(uuid.uuid4())
 
-    # Save uploaded file
+    # Save uploaded file (async read + threaded write to avoid blocking the event loop)
     upload_path = Path(settings.upload_dir) / f"{doc_id}.pdf"
-    with open(upload_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    contents = await file.read()
+    await asyncio.to_thread(upload_path.write_bytes, contents)
 
     logger.info(f"Saved PDF: {upload_path} ({upload_path.stat().st_size} bytes)")
 
@@ -62,17 +62,9 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
     }
     await db.documents.insert_one(doc_record)
 
-    # Trigger Prefect ingestion flow (background — non-blocking)
-    try:
-        import asyncio
-        asyncio.create_task(_run_ingestion_background(str(upload_path), doc_id))
-        logger.info(f"Ingestion started for doc {doc_id}")
-    except Exception as e:
-        logger.error(f"Failed to start ingestion: {e}")
-        await db.documents.update_one(
-            {"_id": doc_id},
-            {"$set": {"status": DocumentStatus.ERROR.value, "error_message": str(e)}},
-        )
+    # Trigger ingestion pipeline (background — runs after response is sent)
+    background_tasks.add_task(_run_ingestion_background, str(upload_path), doc_id)
+    logger.info(f"Ingestion queued for doc {doc_id}")
 
     return {
         "doc_id": doc_id,
@@ -83,12 +75,28 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
 
 
 async def _run_ingestion_background(pdf_path: str, doc_id: str):
-    """Run the Prefect ingestion flow in background."""
+    """Run the ingestion pipeline in background."""
     try:
         from modus_workers.flows.ingest_document import ingest_document_flow
         await ingest_document_flow(pdf_path=pdf_path, doc_id=doc_id)
     except Exception as e:
         logger.error(f"Background ingestion failed for {doc_id}: {e}", exc_info=True)
+        # ingest_document_flow updates status to ERROR internally; this is a safety net
+        # for import errors or other failures before the flow starts.
+        try:
+            import motor.motor_asyncio, os
+            from modus_schemas import DocumentStatus as DS
+            client = motor.motor_asyncio.AsyncIOMotorClient(
+                os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+            )
+            db = client[os.environ.get("MONGO_DB_NAME", "modus_db")]
+            await db.documents.update_one(
+                {"_id": doc_id},
+                {"$set": {"status": DS.ERROR.value, "error_message": str(e)}},
+            )
+            client.close()
+        except Exception:
+            pass
 
 
 @router.get("/{doc_id}")

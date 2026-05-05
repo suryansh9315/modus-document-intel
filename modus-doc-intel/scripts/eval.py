@@ -127,8 +127,9 @@ async def run_evaluation(doc_id: str, api_url: str) -> dict:
                     "notes": notes,
                 })
 
-            # Small delay between questions
-            await asyncio.sleep(1)
+            # Delay between questions — each query makes 2-4 LLM calls.
+            # Cerebras limit is 30 req/min, so 10s gives adequate headroom.
+            await asyncio.sleep(10)
 
     total = len(questions)
     accuracy = passed / total * 100 if total > 0 else 0

@@ -1,1 +1,1 @@
-"""Prefect ingestion workers for modus-doc-intel."""
+"""Ingestion pipeline workers for modus-doc-intel."""

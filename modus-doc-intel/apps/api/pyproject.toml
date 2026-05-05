@@ -17,7 +17,6 @@ dependencies = [
     "python-multipart>=0.0.9",
     "pydantic-settings>=2.3",
     "python-dotenv>=1.0",
-    "prefect>=3.0",
 ]
 
 [tool.uv.sources]

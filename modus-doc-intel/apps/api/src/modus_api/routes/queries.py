@@ -59,6 +59,11 @@ async def stream_query(request: Request, body: QueryRequest):
         "sources": [],
         "contradictions": [],
         "route": "",
+        "_global_context": "",
+        "_cluster_context": "",
+        "_section_context": "",
+        "_analysis_result": "",
+        "_extracted_items": [],
     }
 
     async def event_generator():
@@ -81,13 +86,14 @@ async def stream_query(request: Request, body: QueryRequest):
                         yield f'8:{json.dumps(sources)}\n'
 
                     # Emit contradictions if any
+                    # 8: frame requires a JSON array per Vercel AI SDK data-stream spec
                     contradictions = event.get("contradictions", [])
                     if contradictions:
                         contra_dicts = [
                             c.model_dump() if hasattr(c, "model_dump") else c
                             for c in contradictions
                         ]
-                        yield f'8:{json.dumps({"contradictions": contra_dicts})}\n'
+                        yield f'8:{json.dumps([{"contradictions": contra_dicts}])}\n'
 
             # Done signal
             yield 'd:{}\n'
@@ -131,6 +137,11 @@ async def run_query(request: Request, body: QueryRequest):
         "sources": [],
         "contradictions": [],
         "route": "",
+        "_global_context": "",
+        "_cluster_context": "",
+        "_section_context": "",
+        "_analysis_result": "",
+        "_extracted_items": [],
     }
 
     final_state = await query_graph.ainvoke(initial_state)

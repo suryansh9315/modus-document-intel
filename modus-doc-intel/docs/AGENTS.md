@@ -6,14 +6,14 @@
 |---|-------|-------|--------|-------|------|
 | 1 | **Ingestion** | PDF path + page range | `list[PageOCR]` | docTR / pdfplumber (rules) | OCR + table extraction |
 | 2 | **Segmentation** | `list[PageOCR]` | `list[SectionBoundary]` | Rule-based (regex) | Heading detection, fallback chunking |
-| 3 | **Local Analysis** | Section text (~8K tok) | `SectionSummary` (L1) | Llama-3.3-70B | Per-section deep dive, claim extraction |
-| 4 | **Cluster Aggregation** | `list[SectionSummary]` | `ClusterDigest` (L2) | Llama-3.3-70B | Hierarchical compression of 5-7 sections |
-| 5 | **Global Aggregation** | `list[ClusterDigest]` | `GlobalDigest` (L3) | Llama-3.3-70B | Whole-document synthesis |
+| 3 | **Local Analysis** | Section text (~8K chars) | `SectionSummary` (L1) | llama3.1-8b (Cerebras) | Per-section summary + claim extraction |
+| 4 | **Cluster Aggregation** | `list[SectionSummary]` | `ClusterDigest` (L2) | gpt-oss-120b (Cerebras) | Hierarchical compression of 5–7 sections |
+| 5 | **Global Aggregation** | `list[ClusterDigest]` | `GlobalDigest` (L3) | gpt-oss-120b (Cerebras) | Whole-document synthesis |
 | 6 | **Query Router** | `QueryRequest` + `AgentState` | routing decision (str) | Rule-based | Intent classification → branch |
-| 7 | **Global Reasoning** | L3 + L2 + L1 context | draft answer | Llama-3.3-70B | Full-doc synthesis for SUMMARIZE_FULL |
-| 8 | **Extractor** | Claims index + schema | JSON entities/risks/decisions | Llama-3.1-8B | Structured extraction in JSON mode |
-| 9 | **Contradiction** | DuckDB result + context | `list[ContradictionReport]` | Llama-3.3-70B | Conflict classification and explanation |
-| 10 | **Query Synthesizer** | All upstream outputs | final answer + sources | Llama-3.3-70B | Citation-grounded answer generation |
+| 7 | **Global Reasoning** | L3 + L2 + L1 context | draft answer | gpt-oss-120b (Cerebras) | Full-doc synthesis for SUMMARIZE_FULL |
+| 8 | **Extractor** | L3+L2+L1 context + DuckDB seed claims | JSON entities/risks/decisions | llama3.1-8b (Cerebras) | Structured extraction in JSON mode |
+| 9 | **Contradiction** | DuckDB candidates (relevance-sorted) + context | `list[ContradictionReport]` | llama3.1-8b (Cerebras) | Conflict classification and explanation |
+| 10 | **Query Synthesizer** | All upstream outputs | final answer + sources | gpt-oss-120b (Cerebras) | Citation-grounded answer generation |
 
 ---
 
@@ -44,7 +44,7 @@
 - `^ANNEX(?:URE)?\s+[A-Z\d]` → SectionKind.APPENDIX
 
 **Fallback:** If < 5 sections detected, splits into equal 30-page chunks.
-This guarantees sufficient granularity for the L1/L2/L3 pipeline.
+This guarantees sufficient granularity for the L1/L2/L3 pipeline regardless of document formatting.
 
 ---
 
@@ -52,25 +52,28 @@ This guarantees sufficient granularity for the L1/L2/L3 pipeline.
 **File:** `services/workers/tasks/summarize.py`
 
 **Process:**
-1. Concatenates all pages in a section into a single text blob (max 40K chars).
-2. Tables are prepended in Markdown format to ensure numbers are preserved.
-3. Calls Llama-3.3-70B with JSON mode via Groq API.
-4. Extracts: summary_text (~800-1200 words), key_metrics, key_entities, key_risks, claims.
-5. Claims become `ExtractedClaim` objects with normalized subject for contradiction detection.
+1. Merges sections with fewer than 4 pages into their neighbor before processing (reduces API calls).
+2. Concatenates all pages in a section into a single text blob.
+3. Tables are prepended in Markdown format to ensure numbers are preserved.
+4. **Chunking (P2-3):** If the full section text exceeds **8K chars**, it is split into overlapping chunks of 8K chars with a 500-char overlap. One `llama3.1-8b` call is made per chunk. Results are merged: `key_metrics` are unioned (later chunks override the same key), `key_entities`/`key_risks`/`claims` are deduplicated and concatenated. This ensures sections of any length are fully analyzed.
+5. Extracts per chunk: `summary_text` (~150–200 words), `key_metrics`, `key_entities`, `key_risks`, `claims`.
+6. Claims become `ExtractedClaim` objects with normalized subject for contradiction detection.
 
-**Rate limiting:** `asyncio.Semaphore(5)` + 2s sleep between batches.
+**Concurrency:** `asyncio.Semaphore(1)` with a 3-second inter-request sleep for rate-limit compliance. Sections run concurrently via `asyncio.gather`; chunks within one section run sequentially through the semaphore.
 
 ---
 
 ### 4 & 5. Aggregation Agents (L2 + L3)
 **File:** `services/workers/tasks/summarize.py`
 
-**L2:** Clusters 5-7 consecutive sections (by page proximity) into a `ClusterDigest`.
+**L2:** Clusters 5–7 consecutive sections (by page proximity) into a `ClusterDigest`.
 Input: all L1 summary texts + key metrics concatenated.
-Output: ~4K token digest preserving cross-section themes and consolidated metrics.
+Output: ~4K token digest preserving cross-section themes.
+Schema fields: `digest_text`, `consolidated_metrics: dict[str, str]` (P2-2 — curated metrics across the cluster, captured from the LLM's JSON output).
 
 **L3:** Synthesizes all cluster digests into a `GlobalDigest`.
 Output: ~3K token digest + 300-word executive summary.
+Schema fields: `digest_text`, `executive_summary`, `top_metrics: dict[str, str]`, `top_risks: list[str]` (P2-1 — LLM-curated cross-document key figures and risk factors, captured from the LLM's JSON output rather than discarded).
 This is the "entry point" for the query-time context budget.
 
 ---
@@ -97,9 +100,20 @@ Maps `QueryType` enum → routing key string used by LangGraph conditional edges
 
 **Used for:** SUMMARIZE_FULL queries.
 
-Assembles the full hierarchical context (L3 global digest + relevant L2 clusters +
-relevant L1 sections) and synthesizes an answer using the `query_summarize_full.j2`
-template. All citation page numbers come from the section summaries, not from raw text.
+Assembles **L3 + L2 context only** (no L1 sections) and synthesizes an answer using
+the `query_summarize_full.j2` template. L1 sections are deliberately excluded for
+SUMMARIZE_FULL — loading all 50+ section summaries at once would balloon the prompt
+past practical limits, and L3+L2 already provides a complete document synthesis at
+the right level of abstraction.
+
+The L3 `global_context` block now includes:
+- `digest_text` — full narrative synthesis
+- `executive_summary` — ≤300-word data-driven summary
+- `top_metrics` — LLM-curated key figures (populated after re-ingestion)
+- `top_risks` — LLM-curated top risks (populated after re-ingestion)
+- `Key Metrics (All Sections)` — union of all L1 `key_metrics` dicts, appended for SUMMARIZE_FULL queries regardless of ingestion date
+
+The prompt instructs the model to reference the "Key Metrics (All Sections)" block with exact figures rather than paraphrasing numbers.
 
 ---
 
@@ -108,10 +122,31 @@ template. All citation page numbers come from the section summaries, not from ra
 
 **Used for:** EXTRACT_ENTITIES, EXTRACT_RISKS, EXTRACT_DECISIONS
 
-Uses **Llama-3.1-8B** (smaller model) with JSON mode for structured, predictable output.
-Saves tokens and latency compared to Llama-70B for structured extraction tasks.
+Uses **llama3.1-8b** with JSON mode for fast, structured output.
 
-Output schema per item: `{name, value, description, section, page, fiscal_year}`
+**Context assembly:**
+
+| Context level | Characters used |
+|---|---|
+| L3 global digest (+ executive_summary + top_metrics/top_risks) | Full — no truncation |
+| L2 cluster digests (+ consolidated_metrics) | Full — no truncation |
+| L1 section summaries | First 32,000 chars (was 8,000) |
+
+**DuckDB seed claims:** Before the LLM call, pre-extracted claims are fetched from DuckDB and prepended as "PRE-EXTRACTED CANDIDATES":
+- `EXTRACT_ENTITIES` → `claim_type = "metric"` claims
+- `EXTRACT_RISKS` → `claim_type = "risk_factor"` claims
+- `EXTRACT_DECISIONS` → `claim_type = "commitment"` claims
+
+The LLM refines, deduplicates, and augments the candidate list rather than starting from scratch. Seed fetch failures degrade gracefully — extraction still runs.
+
+**Section ordering:** For `EXTRACT_*` queries without explicit `section_ids`, `aggregation_node` sorts L1 sections by content density (most `key_metrics` / `key_risks` / commitment claims first) so the most information-rich sections load within the token budget.
+
+**Robustness:** Items with empty, null, or placeholder names ("Unknown", "n/a") are filtered out. If the result is empty after filtering, one retry is made with an explicit instruction to return at least 5 items using the pre-extracted candidates as seed.
+
+Output schema per item: `{name, value, description, section, page}`
+
+The structured result flows into `_analysis_result` and `_extracted_items` in
+`AgentState`, then gets formatted and cited by the final `query_node`.
 
 ---
 
@@ -119,12 +154,13 @@ Output schema per item: `{name, value, description, section, page, fiscal_year}`
 **File:** `services/agents/nodes/contradiction.py`
 
 **Two-stage process:**
-1. **SQL query** to DuckDB: finds `(claim_a, claim_b)` pairs where
+1. **SQL query** to DuckDB via `duckdb_write.query_contradictions()`: finds `(claim_a, claim_b)` pairs where
    `a.doc_id = b.doc_id AND a.subject = b.subject AND a.value != b.value`.
    Subject fields are normalized to lowercase for matching.
-2. **Llama-70B classification**: for each candidate pair, determines:
-   - Is this a genuine contradiction (same metric, same period, different value)?
-   - Or an explainable difference (different periods, different methodologies)?
+2. **Topic-relevance sort:** Before the top-20 cap, candidates are re-sorted by overlap between the candidate's `subject` words and meaningful words in the user's question (stopwords excluded). This ensures that alphabetically-late subjects (e.g. "NPA ratio") are not excluded by the slice when the question is specifically about them.
+3. **Llama-70B classification**: for each candidate pair in the top 20, determines:
+   - Is this a genuine contradiction (same metric, different value)?
+   - Or an explainable difference (different sections, different methodologies)?
    - Severity: high / medium / low.
 
 Uses `duckdb.connect(read_only=True)` for concurrent query-time safety.
@@ -134,12 +170,13 @@ Uses `duckdb.connect(read_only=True)` for concurrent query-time safety.
 ### 10. Query Synthesizer
 **File:** `services/agents/nodes/query.py`
 
-**Always the last node.** Streams the final answer using Llama-70B.
+**Always the last node.** Streams the final answer using gpt-oss-120b.
 Assembles the upstream analysis result + context summary into the `query_synthesize.j2`
-template, which enforces citation format (`[p.X]`) and structured markdown output.
+template, which enforces citation format (`[p.N]`) and structured markdown output.
 
-Builds the `sources` list from the `context_used` entries in AgentState,
-allowing the frontend to display which document layers were consulted.
+Extraction and contradiction query types bypass the synthesis LLM call entirely —
+their branch nodes produce complete formatted output, so `query_node` passes through
+`_analysis_result` directly to avoid a redundant PRIMARY_MODEL request.
 
 ---
 
@@ -163,3 +200,15 @@ Private state keys (not in TypedDict but used at runtime):
 - `_cluster_context`: concatenated L2 digests
 - `_section_context`: concatenated L1 summaries for relevant sections
 - `_analysis_result`: intermediate analysis from branch nodes
+
+---
+
+## Ingestion Pipeline
+
+The ingestion pipeline (`services/workers/flows/ingest_document.py`) is plain async Python —
+no external orchestrator required. The `ingest_document_flow` function runs the full
+OCR → Segment → L1 → DuckDB → L2 → L3 sequence in a single async call, triggered
+as a background task by FastAPI on document upload.
+
+The `PREFECT_API_URL` and `PREFECT_SERVER_ALLOW_EPHEMERAL_MODE` environment variables
+are present for optional future Prefect integration but are not used by the current pipeline.
