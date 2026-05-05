@@ -1,28 +1,4 @@
 services:
-  mongo:
-    image: mongo:7
-    restart: unless-stopped
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    ports:
-      - "6380:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   api:
     build:
       context: ..
@@ -33,48 +9,11 @@ services:
     env_file:
       - ../.env
     environment:
-      MONGO_URI: mongodb://mongo:27017
-      REDIS_URL: redis://redis:6379
+      MONGO_URI: ${MONGO_URI}           # Atlas connection string from .env
       DUCKDB_PATH: /data/modus.duckdb
       UPLOAD_DIR: /data/uploads
     volumes:
       - app_data:/data
-    depends_on:
-      mongo:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  agents:
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile.agents
-    restart: unless-stopped
-    env_file:
-      - ../.env
-    environment:
-      MONGO_URI: mongodb://mongo:27017
-      REDIS_URL: redis://redis:6379
-      DUCKDB_PATH: /data/modus.duckdb
-    volumes:
-      - app_data:/data
-    depends_on:
-      mongo:
-        condition: service_healthy
-
-  web:
-    build:
-      context: ../apps/web
-      dockerfile: ../../infra/Dockerfile.web
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
-      API_URL: http://api:8000
-    depends_on:
-      - api
 
 volumes:
-  mongo_data:
   app_data:
