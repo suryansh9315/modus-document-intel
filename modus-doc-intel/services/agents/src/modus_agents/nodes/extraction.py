@@ -117,6 +117,8 @@ async def extraction_node(state: AgentState) -> AgentState:
         except Exception:
             pass  # graceful degradation — extraction still runs without seeds
 
+    logger.info(f"extraction_node final context length: {len(context)} chars, preview: {context[:200]!r}")
+
     messages = PromptRegistry.render_messages(
         "query_extract",
         {
@@ -125,8 +127,8 @@ async def extraction_node(state: AgentState) -> AgentState:
             "context": context,
         },
     )
-
-    logger.info(f"extraction_node final context length: {len(context)} chars, preview: {context[:200]!r}")
+    total_msg_chars = sum(len(m["content"]) for m in messages)
+    logger.info(f"extraction_node messages: {len(messages)} messages, {total_msg_chars} total chars")
 
     try:
         raw = await client.complete(
