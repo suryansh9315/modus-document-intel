@@ -164,9 +164,12 @@ class GroqPrimaryClient:
         if response_format:
             payload["response_format"] = response_format
 
+        logger.info(f"Groq complete: waiting for semaphore, payload tokens ~{sum(len(m.get('content','')) for m in payload['messages'])} chars")
         async with _groq_semaphore:
+            logger.info("Groq complete: semaphore acquired, sending request")
             for attempt in range(MAX_RETRIES):
                 r = await self._client.post("/chat/completions", json=payload)
+                logger.info(f"Groq complete: got response status={r.status_code}")
                 if r.status_code == 429:
                     retry_after = r.headers.get("retry-after")
                     delay = float(retry_after) if retry_after else BASE_DELAY * (2 ** attempt)

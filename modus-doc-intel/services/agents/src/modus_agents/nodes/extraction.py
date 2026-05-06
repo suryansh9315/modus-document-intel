@@ -136,6 +136,7 @@ async def extraction_node(state: AgentState) -> AgentState:
             model=PRIMARY_MODEL,
             response_format={"type": "json_object"},
         )
+        logger.info(f"extraction_node raw response ({len(raw)} chars): {raw[:500]!r}")
     except Exception as e:
         logger.error(f"extraction_node LLM call failed: {e}")
         state["_analysis_result"] = f"## Extracted {extraction_type.capitalize()}\n\nExtraction unavailable due to API error: {e}"
