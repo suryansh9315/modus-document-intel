@@ -93,8 +93,8 @@ async def extraction_node(state: AgentState) -> AgentState:
 
     context = "\n\n".join(filter(None, [
         global_context,             # Full L3 (~800 tokens)
-        cluster_context,            # Full L2 (~5-15K tokens)
-        section_context[:32_000],   # First 32K chars of L1 (was 8K)
+        cluster_context[:4_000],    # L2 capped at 4K chars for extraction
+        section_context[:6_000],    # L1 capped at 6K chars — DuckDB seeds carry most signal
     ]))
 
     # EXTRACT_ENTITIES seeds from the entities table (typed named entities)
