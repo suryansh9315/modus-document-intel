@@ -79,6 +79,8 @@ async def extraction_node(state: AgentState) -> AgentState:
     cluster_context = state.get("_cluster_context", "")
     global_context = state.get("_global_context", "")
 
+    logger.info(f"extraction_node context lengths — global:{len(global_context)} cluster:{len(cluster_context)} section:{len(section_context)}")
+
     context = "\n\n".join(filter(None, [
         global_context,             # Full L3 (~800 tokens)
         cluster_context,            # Full L2 (~5-15K tokens)
@@ -123,6 +125,8 @@ async def extraction_node(state: AgentState) -> AgentState:
             "context": context,
         },
     )
+
+    logger.info(f"extraction_node final context length: {len(context)} chars, preview: {context[:200]!r}")
 
     try:
         raw = await client.complete(
