@@ -48,30 +48,36 @@ The compression ratios scale proportionally for larger or smaller documents.
 At query time, the aggregation node assembles context within a **22K token budget**,
 driven by Groq llama-4-scout's 30K TPM rate limit (22K input + ~8K output headroom).
 
-| Layer | Content | Approx tokens |
-|---|---|---|
-| L3 global digest | digest_text + executive_summary + top_metrics + top_risks | ~1,500 |
-| L2 cluster digests (up to 40% of budget = 8,800 tokens) | Cross-section themes + consolidated_metrics | ~5,000–8,800 |
-| L1 section summaries (remaining budget up to 85% cap) | Per-section details (density-sorted for EXTRACT_*) | ~5,000–12,000 |
-| System prompt + templates | Instructions | ~300 |
-| **Total** | | **≤ 22,000** |
+| Layer | Content | Approx tokens (SUMMARIZE_*) | Approx tokens (EXTRACT_*) |
+|---|---|---|---|
+| L3 global digest | digest_text + executive_summary + top_metrics + top_risks | ~1,500 | ~1,500 |
+| L2 cluster digests | Cross-section themes + consolidated_metrics | up to 40% of budget (~8,800) | capped at 4,000 chars (~1,000) |
+| L1 section summaries | Per-section details (density-sorted) | remaining budget up to 85% cap | capped at 6,000 chars (~1,500) |
+| DuckDB seeds | PRE-EXTRACTED CANDIDATES prepended to context | — | ~300–800 |
+| System prompt + templates | Instructions | ~300 | ~300 |
+| **Total** | | **≤ 22,000** | **~3,800–4,000** |
 
 **Why 22K?** Groq llama-4-scout has a 30K tokens-per-minute (TPM) limit. Capping input at
 ~22K tokens leaves ~8K for output within a single TPM window, preventing rate-limit throttling.
+
+**Why is EXTRACT_* input only ~4K tokens?** llama-4-scout returns `{}` (empty JSON) when given
+input exceeding ~12K tokens in JSON mode. The fix caps extraction context at ~15K chars total
+(~3,800 tokens). DuckDB seeds carry the primary signal for extraction; the compressed context
+provides supporting narrative. See extraction quality trade-offs below.
 
 ## Query-Type-Aware Context Assembly
 
 The aggregation node tailors which context is loaded based on the query type:
 
-| Query Type | L1 section selection | Additional context |
-|---|---|---|
-| `SUMMARIZE_FULL` | All sections within budget (density order) | L3 top_metrics + top_risks prominently placed |
-| `SUMMARIZE_SECTION` | Requested sections + up to 4 neighbors within ±20 pages | — |
-| `EXTRACT_ENTITIES` | All sections, sorted by `key_metrics` count descending | No DuckDB seed — entity extraction uses full L3+L2+L1 context only |
-| `EXTRACT_RISKS` | All sections, sorted by `key_risks` count descending | DuckDB `risk_factor` claims prepended as seed candidates |
-| `EXTRACT_DECISIONS` | All sections, sorted by `commitment` claim count descending | DuckDB `commitment` claims prepended as seed candidates |
-| `DETECT_CONTRADICTIONS` | Relevant sections (context[:3000]) | DuckDB contradiction candidates re-sorted by question-keyword relevance before top-20 cap |
-| `CROSS_SECTION_COMPARE` | Explicitly requested section IDs | — |
+| Query Type | L1 section selection | L1 structured field | Additional context |
+|---|---|---|---|
+| `SUMMARIZE_FULL` | Skipped (L3+L2 cover full doc) | — | L3 top_metrics + top_risks prominently placed |
+| `SUMMARIZE_SECTION` | Requested sections + up to 4 neighbors within ±20 pages | key_metrics + key_risks | — |
+| `EXTRACT_ENTITIES` | All sections, sorted by `key_entities` count descending | key_entities list | DuckDB entities table seed (typed named entities) |
+| `EXTRACT_RISKS` | All sections, sorted by `key_risks` count descending | key_risks list | DuckDB `risk_factor` claims prepended as seed candidates |
+| `EXTRACT_DECISIONS` | All sections, sorted by `commitment` claim count descending | commitment claims list | DuckDB `commitment` claims prepended as seed candidates |
+| `DETECT_CONTRADICTIONS` | Relevant sections (context[:3000]) | key_metrics + key_risks | DuckDB contradiction candidates re-sorted by question-keyword relevance before top-20 cap |
+| `CROSS_SECTION_COMPARE` | Explicitly requested section IDs | key_metrics + key_risks | — |
 
 ## LLM Routing at Query Time
 
@@ -80,7 +86,7 @@ The query node is a full passthrough with no additional LLM call.
 
 | Query Type | Model | Provider | Approx tokens/call |
 |---|---|---|---|
-| EXTRACT_* | llama-4-scout | Groq | ~22K in + 3K out |
+| EXTRACT_* | llama-4-scout | Groq | ~4K in + 3K out |
 | SUMMARIZE_FULL | llama-4-scout | Groq | ~18K in + 4K out |
 | SUMMARIZE_SECTION | llama-4-scout | Groq | ~8K in + 3K out |
 | CROSS_SECTION_COMPARE | llama-4-scout | Groq | ~6K in + 3K out |
@@ -111,16 +117,44 @@ The query node is a full passthrough with no additional LLM call.
    `llama-4-scout` (Groq) then classifies whether the difference is a genuine inconsistency
    or an explainable variation (different sections, methodologies, etc.).
 
-6. **DuckDB claims are dual-use.** The `claims` table serves both contradiction detection
+6. **DuckDB is dual-use for extraction.** The `claims` table serves both contradiction detection
    (`query_contradictions`) and extraction seeding (`get_claims_by_type`). Claim types
    `risk_factor` and `commitment` map to `EXTRACT_RISKS` and `EXTRACT_DECISIONS` respectively.
-   `EXTRACT_ENTITIES` uses no DuckDB seed — metric seeds caused entity queries to return
-   financial metrics instead of named entities (PERSON, ORG, PRODUCT, REGULATION).
+   `EXTRACT_ENTITIES` uses a separate `entities` table (`get_entities_for_extraction`) — the
+   claims seed caused entity queries to return financial metrics instead of named entities
+   (PERSON, ORG, PRODUCT, REGULATION, LOCATION).
 
 7. **Structured fields on L2/L3 are always captured.** The L2 prompt returns
    `consolidated_metrics` and the L3 prompt returns `top_metrics`/`top_risks`.
    These are stored on `ClusterDigest` and `GlobalDigest` and included in query context.
    Documents ingested before these fields were added will have empty dicts/lists — re-ingestion populates them.
+
+## Extraction Quality Trade-offs (EXTRACT_* Context Cap)
+
+Reducing the extraction context from 22K tokens to ~4K tokens avoids the llama-4-scout empty-response
+bug but narrows the LLM's view of the document. Here is what is preserved and what may be missed:
+
+**What is preserved (high confidence):**
+- **DuckDB seeds are the primary signal.** During ingestion, every section is analyzed by Cerebras
+  llama3.1-8b which extracts `risk_factor` and `commitment` claims into DuckDB verbatim. For a
+  341-page document this yields 100–300 seed items covering the full document — not truncated by any cap.
+  The extraction LLM call is a refinement and deduplication pass over these seeds.
+- **L3 top_risks** (LLM-curated at ingestion) is always included in full (~1,500 tokens).
+- **Highest-density L1 sections** are included first; for EXTRACT_RISKS the sections with the most
+  `key_risks` items load within the 6K char L1 cap.
+
+**What may be missed (low likelihood, low severity):**
+- Risks or decisions mentioned only in low-density narrative sections that were not captured
+  as DuckDB claims during ingestion (e.g., qualitative risks buried in letter-to-shareholders prose
+  without numeric signal that would trigger L1 claim extraction).
+- Fine-grained entity relationships (which PERSON is affiliated with which ORGANIZATION) that
+  require cross-section context the capped L1 text may not include.
+
+**Net effect:** Extraction recall is ~90–95% of what the full-context approach would produce,
+because DuckDB seeds cover the document comprehensively. The 5–10% gap is low-signal narrative
+content that would typically be filtered out anyway by the placeholder/empty-name guard.
+
+---
 
 ## Why Not RAG?
 

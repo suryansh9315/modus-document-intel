@@ -4,7 +4,7 @@
 
 | # | Agent | Input | Output | Model | Provider | Role |
 |---|-------|-------|--------|-------|----------|------|
-| 1 | **Ingestion** | PDF path + page range | `list[PageOCR]` | docTR / pdfplumber (rules) | Local | OCR + table extraction |
+| 1 | **Ingestion** | PDF path | `list[PageOCR]` | pdfplumber | Local | Text + table extraction |
 | 2 | **Segmentation** | `list[PageOCR]` | `list[SectionBoundary]` | Rule-based (regex) | Local | Heading detection, fallback chunking |
 | 3 | **Local Analysis (L1)** | Section text (~8K chars) | `SectionSummary` | `llama3.1-8b` | Cerebras | Per-section summary + claim extraction |
 | 4 | **Cluster Aggregation (L2)** | `list[SectionSummary]` | `ClusterDigest` | `llama3.1-8b` | Cerebras | Hierarchical compression of 5–7 sections |
@@ -40,11 +40,12 @@ Every query type makes **exactly 1 LLM call**. The query node is a passthrough f
 **File:** `services/workers/tasks/ocr.py`
 
 **Strategy:**
-1. Try `pdfplumber` — fast, high-accuracy for text-native PDFs.
-2. If text content < 100 chars, fall back to `docTR` (neural OCR for scanned pages).
-3. For pages with tables, `pdfplumber.extract_tables()` is called separately.
+1. `pdfplumber` — fast, high-accuracy for text-native PDFs.
+2. For pages with tables, `pdfplumber.extract_tables()` is called separately.
    Table data is serialized as Markdown and prepended to the raw text.
    This prevents LLMs from hallucinating numbers by re-deriving them from prose.
+
+**Note:** Neural OCR (docTR) was removed. The system only processes text-native PDFs via pdfplumber.
 
 **Output schema:** `PageOCR(page_number, raw_text, confidence, ocr_engine, has_tables, table_markdown)`
 
@@ -149,28 +150,42 @@ The result flows into `_analysis_result`. The query node passes it through direc
 
 **Used for:** EXTRACT_ENTITIES, EXTRACT_RISKS, EXTRACT_DECISIONS
 
-Uses Groq llama-4-scout with JSON mode (`response_format: {"type": "json_object"}`) and full 22K token context — no truncation.
+Uses Groq llama-4-scout with JSON mode (`response_format: {"type": "json_object"}`).
 
-**Context assembly (from aggregation state):**
+**Context budget for extraction:** ~15K chars total (not 22K tokens). llama-4-scout silently returns `{}` when given input exceeding ~12K tokens, so extraction context is explicitly capped:
 
-| Context level | Content |
+| Context level | Cap | Content |
+|---|---|---|
+| L3 global digest | uncapped (~800 tokens) | digest_text + executive_summary + top_metrics + top_risks |
+| L2 cluster digests | `[:4,000]` chars | digest_text + consolidated_metrics per cluster |
+| L1 section summaries | `[:6,000]` chars | summary_text + type-specific structured field (density-sorted) |
+
+**L1 content per query type** (key_metrics is excluded from EXTRACT_* — it adds noise without signal):
+
+| Query Type | L1 structured field included |
 |---|---|
-| L3 global digest | digest_text + executive_summary + top_metrics + top_risks |
-| L2 cluster digests | digest_text + consolidated_metrics per cluster |
-| L1 section summaries | summary_text + key_metrics + key_risks (density-sorted) |
+| `EXTRACT_ENTITIES` | `key_entities` list |
+| `EXTRACT_RISKS` | `key_risks` list |
+| `EXTRACT_DECISIONS` | commitment `claims` list |
+| `SUMMARIZE_*` / other | `key_metrics` + `key_risks` |
 
-**DuckDB seed claims:** Before the LLM call, pre-extracted claims are fetched from DuckDB and prepended as "PRE-EXTRACTED CANDIDATES":
-- `EXTRACT_ENTITIES` → no seed (metric seeds caused financial metrics to be returned instead of named entities)
-- `EXTRACT_RISKS` → `claim_type = "risk_factor"` claims
-- `EXTRACT_DECISIONS` → `claim_type = "commitment"` claims
+**DuckDB seeds:** Before the LLM call, pre-extracted data is fetched from DuckDB and prepended as "PRE-EXTRACTED CANDIDATES". The LLM refines, deduplicates, and augments rather than starting from scratch.
 
-The LLM refines, deduplicates, and augments the candidate list rather than starting from scratch. Seed fetch failures degrade gracefully.
+- `EXTRACT_ENTITIES` → entities table (`get_entities_for_extraction`), up to 50 items with `name [entity_type]` format
+- `EXTRACT_RISKS` → `claim_type = "risk_factor"` claims, up to 50 items
+- `EXTRACT_DECISIONS` → `claim_type = "commitment"` claims, up to 50 items
 
-**Entity extraction scope:** The extraction prompt instructs the model to extract named entities only — PERSON (executives, directors), ORGANIZATION (subsidiaries, regulators, partners), PRODUCT (financial products, services), REGULATION (laws, guidelines, frameworks), LOCATION (countries, cities, offices). Financial metrics and ratios are explicitly excluded from entity extraction.
+Seed fetch failures degrade gracefully — extraction runs without seeds.
 
-**Section ordering:** For `EXTRACT_*` queries, `aggregation_node` sorts L1 sections by content density (most `key_metrics` / `key_risks` / commitment claims first) so the most information-rich sections load within the token budget.
+**Entity extraction scope:** Named entities only — PERSON (executives, directors), ORGANIZATION (subsidiaries, regulators, partners), PRODUCT (financial products, services), REGULATION (laws, guidelines, frameworks), LOCATION (countries, cities, offices). Financial metrics and ratios are explicitly excluded.
 
-**Robustness:** Items with empty, null, or placeholder names ("Unknown", "n/a") are filtered out.
+**Section ordering:** `aggregation_node` sorts L1 sections by content density (most `key_risks` / `key_entities` / commitment claims first) so the highest-signal sections load within the char cap.
+
+**JSON robustness:**
+- `json_validate_failed` (Groq HTTP 400): the `failed_generation` field is returned directly and parsed — this avoids losing valid output that Groq's schema validation rejected.
+- `_parse_json_response()` handles: direct parse → markdown fence stripping → expected key pattern search (`{"items"`, `{"risks"`, etc.) → one level deep unwrap (model sometimes nests data under a narrative wrapper key) → largest brace block fallback.
+- Key normalization: `risk_name` / `entity_name` / `decision_name` / `title` / `risk` / `entity` are all remapped to `name`.
+- Items with empty, null, or placeholder names ("Unknown", "n/a") are filtered out.
 
 Output schema per item: `{name, value, description, section, page}`
 
