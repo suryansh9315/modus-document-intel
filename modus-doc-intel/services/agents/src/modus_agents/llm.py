@@ -180,8 +180,18 @@ class GroqPrimaryClient:
                     except Exception:
                         code = ""
                     if code == "json_validate_failed" and "response_format" in payload:
+                        try:
+                            failed_gen = r.json().get("error", {}).get("failed_generation", "")
+                            logger.warning(f"Groq failed_generation preview: {failed_gen[:300]!r}")
+                        except Exception:
+                            pass
                         logger.warning("Groq json_validate_failed — retrying without JSON mode")
                         payload.pop("response_format")
+                        msgs = payload["messages"]
+                        if msgs and msgs[0].get("role") == "system":
+                            msgs[0]["content"] += "\nRespond with valid JSON only. No markdown, no explanation. Start with { end with }."
+                        else:
+                            msgs.insert(0, {"role": "system", "content": "Respond with valid JSON only. No markdown, no explanation. Start with { end with }."})
                         await asyncio.sleep(_groq_interval)
                         continue
                 if r.status_code >= 400:
