@@ -16,6 +16,10 @@ from modus_api.config import settings
 from modus_api.routes import documents, ingestion, queries
 from modus_workers.tasks.duckdb_write import init_schema as init_duckdb
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
