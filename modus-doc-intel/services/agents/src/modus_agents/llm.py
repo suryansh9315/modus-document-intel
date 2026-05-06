@@ -182,10 +182,13 @@ class GroqPrimaryClient:
                     if code == "json_validate_failed" and "response_format" in payload:
                         try:
                             failed_gen = r.json().get("error", {}).get("failed_generation", "")
-                            logger.warning(f"Groq failed_generation preview: {failed_gen[:300]!r}")
+                            if failed_gen:
+                                logger.warning(f"Groq json_validate_failed — returning failed_generation directly ({len(failed_gen)} chars)")
+                                await asyncio.sleep(_groq_interval)
+                                return failed_gen
                         except Exception:
                             pass
-                        logger.warning("Groq json_validate_failed — retrying without JSON mode")
+                        logger.warning("Groq json_validate_failed — no failed_generation, retrying without JSON mode")
                         payload.pop("response_format")
                         msgs = payload["messages"]
                         if msgs and msgs[0].get("role") == "system":

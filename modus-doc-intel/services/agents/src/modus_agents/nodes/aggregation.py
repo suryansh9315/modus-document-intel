@@ -169,11 +169,27 @@ async def aggregation_node(state: AgentState) -> AgentState:
             s = section_summaries[sid]
             b = section_boundaries_map.get(sid)
             page_ref = f" [pp.{b.start_page + 1}–{b.end_page + 1}]" if b else ""
-            summary_text = (
-                f"[Section: {sid}{page_ref}]\n{s.summary_text}\n"
-                f"Key Metrics: {s.key_metrics}\n"
-                f"Key Risks: {', '.join(s.key_risks[:5])}"
-            )
+            if query.query_type == QueryType.EXTRACT_RISKS:
+                summary_text = (
+                    f"[Section: {sid}{page_ref}]\n{s.summary_text}\n"
+                    f"Key Risks: {', '.join(s.key_risks[:10])}"
+                )
+            elif query.query_type == QueryType.EXTRACT_ENTITIES:
+                summary_text = (
+                    f"[Section: {sid}{page_ref}]\n{s.summary_text}\n"
+                    f"Key Entities: {s.key_entities[:20]}"
+                )
+            elif query.query_type == QueryType.EXTRACT_DECISIONS:
+                summary_text = (
+                    f"[Section: {sid}{page_ref}]\n{s.summary_text}\n"
+                    f"Key Claims: {[c.claim_text for c in s.claims if c.claim_type == 'commitment'][:10]}"
+                )
+            else:
+                summary_text = (
+                    f"[Section: {sid}{page_ref}]\n{s.summary_text}\n"
+                    f"Key Metrics: {s.key_metrics}\n"
+                    f"Key Risks: {', '.join(s.key_risks[:5])}"
+                )
             tokens = _count_tokens(summary_text)
             if budget_used + tokens < TOKEN_BUDGET * 0.85:  # leave 15% for answer
                 section_context_parts.append(summary_text)
