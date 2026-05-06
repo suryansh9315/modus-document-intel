@@ -174,6 +174,16 @@ class GroqPrimaryClient:
                     logger.warning(f"Groq rate limited (429), retrying in {delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})")
                     await asyncio.sleep(delay)
                     continue
+                if r.status_code == 400:
+                    try:
+                        code = r.json().get("error", {}).get("code", "")
+                    except Exception:
+                        code = ""
+                    if code == "json_validate_failed" and "response_format" in payload:
+                        logger.warning("Groq json_validate_failed — retrying without JSON mode")
+                        payload.pop("response_format")
+                        await asyncio.sleep(_groq_interval)
+                        continue
                 if r.status_code >= 400:
                     logger.error(f"Groq API error {r.status_code}: {r.text[:500]}")
                 r.raise_for_status()

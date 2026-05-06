@@ -138,8 +138,12 @@ async def extraction_node(state: AgentState) -> AgentState:
 
     try:
         data = _parse_json_response(raw)
-        items = data.get("items") or []
-        summary = data.get("summary") or ""
+        if isinstance(data, list):
+            items = data
+            summary = ""
+        else:
+            items = data.get("items") or []
+            summary = data.get("summary") or ""
         # Guard: LLM sometimes nests the full JSON object inside the summary field
         if summary and isinstance(summary, str) and summary.strip().startswith(("{", "[")):
             try:
