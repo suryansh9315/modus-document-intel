@@ -88,6 +88,9 @@ async def extraction_node(state: AgentState) -> AgentState:
     cluster_context = state.get("_cluster_context", "")
     global_context = state.get("_global_context", "")
 
+    logger.info(f"[extraction] state keys: {list(state.keys())}")
+    logger.info(f"[extraction] context lengths — global:{len(global_context)} cluster:{len(cluster_context)} section:{len(section_context)}")
+
     context = "\n\n".join(filter(None, [
         global_context,             # Full L3 (~800 tokens)
         cluster_context,            # Full L2 (~5-15K tokens)
@@ -124,6 +127,7 @@ async def extraction_node(state: AgentState) -> AgentState:
         except Exception:
             pass  # graceful degradation — extraction still runs without seeds
 
+    logger.info(f"[extraction] final context: {len(context)} chars")
     messages = PromptRegistry.render_messages(
         "query_extract",
         {
@@ -132,12 +136,14 @@ async def extraction_node(state: AgentState) -> AgentState:
             "context": context,
         },
     )
+    logger.info(f"[extraction] messages: {len(messages)} msgs, {sum(len(m['content']) for m in messages)} total chars")
     try:
         raw = await client.complete(
             messages,
             model=PRIMARY_MODEL,
             response_format={"type": "json_object"},
         )
+        logger.info(f"[extraction] raw response ({len(raw)} chars): {raw[:300]!r}")
     except Exception as e:
         logger.error(f"extraction_node LLM call failed: {e}")
         state["_analysis_result"] = f"## Extracted {extraction_type.capitalize()}\n\nExtraction unavailable due to API error: {e}"
@@ -186,7 +192,7 @@ async def extraction_node(state: AgentState) -> AgentState:
     except json.JSONDecodeError:
         items = []
         summary = ""
-        logger.warning("extraction_node: could not parse JSON from LLM response")
+        logger.warning(f"[extraction] could not parse JSON — raw: {raw[:200]!r}")
 
     # Normalize alternative key names the model sometimes uses
     for item in items:
@@ -233,6 +239,7 @@ async def extraction_node(state: AgentState) -> AgentState:
     if summary:
         lines.append(f"\n**Summary:** {summary}")
 
+    logger.info(f"extraction_node: {len(items)} items extracted for {extraction_type}")
     state["_analysis_result"] = "\n".join(lines)
     state["_extracted_items"] = items
     return state

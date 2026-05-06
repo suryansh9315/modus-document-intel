@@ -164,9 +164,12 @@ class GroqPrimaryClient:
         if response_format:
             payload["response_format"] = response_format
 
+        msg_chars = sum(len(m.get("content", "")) for m in payload["messages"])
+        logger.info(f"[groq] sending request: model={payload['model']} msgs={len(payload['messages'])} chars={msg_chars}")
         async with _groq_semaphore:
             for attempt in range(MAX_RETRIES):
                 r = await self._client.post("/chat/completions", json=payload)
+                logger.info(f"[groq] response: status={r.status_code} attempt={attempt}")
                 if r.status_code == 429:
                     retry_after = r.headers.get("retry-after")
                     delay = float(retry_after) if retry_after else BASE_DELAY * (2 ** attempt)
