@@ -59,7 +59,7 @@ User Query ──────────── FastAPI ────────
                            EXTRACT_* FULL SECTION CONTRA
                            ENTITIES  SUM  /CROSS   DICT
                                  │      │    │      │
-                          Groq   │ Groq │ Groq│ Cerebras
+                          Groq   │ Groq │ Groq│  Groq
                           Extract│Global│Local│ Contra
                           Node   │Reason│ Node│ Node
                                  │      │    │      │
@@ -113,7 +113,7 @@ context budget and routing to a specialized agent node.
 **Nodes:**
 - `aggregation` — loads L3 + L2 + L1 within 22K token budget; for `EXTRACT_*` sorts L1 sections by content density; for `SUMMARIZE_SECTION` also loads up to 4 neighboring sections within ±20 pages
 - `local_analysis` — Groq: direct answer for SUMMARIZE_SECTION and CROSS_SECTION_COMPARE
-- `global_reasoning` — Groq: full-document synthesis for SUMMARIZE_FULL (L3 + L2 + L1 context)
+- `global_reasoning` — Groq: full-document synthesis for SUMMARIZE_FULL (L3 + L2 context; L1 skipped — L3+L2 already cover the full document)
 - `extraction` — Groq JSON mode: structured extraction; EXTRACT_ENTITIES seeded from DuckDB entities table (typed named entities from ingestion); EXTRACT_RISKS/DECISIONS seeded with DuckDB claims
 - `contradiction` — Groq JSON mode: DuckDB SQL + LLM classification; candidates re-sorted by question-keyword relevance before top-20 cap
 - `query` — passthrough only; no LLM call for any query type

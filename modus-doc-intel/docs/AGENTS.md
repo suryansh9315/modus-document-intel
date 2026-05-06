@@ -121,7 +121,7 @@ Maps `QueryType` enum → routing key string used by LangGraph conditional edges
 
 **Used for:** SUMMARIZE_FULL queries.
 
-Assembles **L3 + L2 + L1 context** and synthesizes an answer using the `query_summarize_full.j2` template. The L3 `global_context` block includes:
+Assembles **L3 + L2 context** (L1 is skipped for SUMMARIZE_FULL — L3+L2 already synthesize the full document) and synthesizes an answer using the `query_summarize_full.j2` template. The L3 `global_context` block includes:
 - `digest_text` — full narrative synthesis
 - `executive_summary` — ≤300-word data-driven summary
 - `top_metrics` — LLM-curated key figures

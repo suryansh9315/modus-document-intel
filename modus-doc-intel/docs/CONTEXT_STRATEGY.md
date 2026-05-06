@@ -73,7 +73,7 @@ The aggregation node tailors which context is loaded based on the query type:
 |---|---|---|---|
 | `SUMMARIZE_FULL` | Skipped (L3+L2 cover full doc) | — | L3 top_metrics + top_risks prominently placed |
 | `SUMMARIZE_SECTION` | Requested sections + up to 4 neighbors within ±20 pages | key_metrics + key_risks | — |
-| `EXTRACT_ENTITIES` | All sections, sorted by `key_entities` count descending | key_entities list | DuckDB entities table seed (typed named entities) |
+| `EXTRACT_ENTITIES` | All sections, sorted by `key_metrics` count descending | key_entities list | DuckDB entities table seed (typed named entities) |
 | `EXTRACT_RISKS` | All sections, sorted by `key_risks` count descending | key_risks list | DuckDB `risk_factor` claims prepended as seed candidates |
 | `EXTRACT_DECISIONS` | All sections, sorted by `commitment` claim count descending | commitment claims list | DuckDB `commitment` claims prepended as seed candidates |
 | `DETECT_CONTRADICTIONS` | Relevant sections (context[:3000]) | key_metrics + key_risks | DuckDB contradiction candidates re-sorted by question-keyword relevance before top-20 cap |
