@@ -16,7 +16,7 @@ from modus_agents.llm import get_groq_primary_client, PRIMARY_MODEL
 logger = logging.getLogger(__name__)
 
 
-def _parse_json_response(raw: str) -> dict:
+def _parse_json_response(raw: str) -> dict | list:
     """
     Parse a JSON response from the LLM, handling common wrapping patterns.
     Some models return JSON wrapped in markdown code fences despite json_object mode.
@@ -36,7 +36,16 @@ def _parse_json_response(raw: str) -> dict:
         except json.JSONDecodeError:
             pass
 
-    # Find the first {...} block in the string
+    # Look for a JSON object that contains expected extraction keys
+    for key_pattern in (r'\{"items"', r'\{"risks"', r'\{"entities"', r'\{"decisions"', r'\{"extraction_type"'):
+        match = re.search(key_pattern + r"[\s\S]+\}", cleaned)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+
+    # Find the largest {...} block in the string
     brace_match = re.search(r"\{[\s\S]+\}", cleaned)
     if brace_match:
         try:
@@ -79,8 +88,6 @@ async def extraction_node(state: AgentState) -> AgentState:
     cluster_context = state.get("_cluster_context", "")
     global_context = state.get("_global_context", "")
 
-    logger.info(f"extraction_node context lengths — global:{len(global_context)} cluster:{len(cluster_context)} section:{len(section_context)}")
-
     context = "\n\n".join(filter(None, [
         global_context,             # Full L3 (~800 tokens)
         cluster_context,            # Full L2 (~5-15K tokens)
@@ -117,8 +124,6 @@ async def extraction_node(state: AgentState) -> AgentState:
         except Exception:
             pass  # graceful degradation — extraction still runs without seeds
 
-    logger.info(f"extraction_node final context length: {len(context)} chars, preview: {context[:200]!r}")
-
     messages = PromptRegistry.render_messages(
         "query_extract",
         {
@@ -127,16 +132,12 @@ async def extraction_node(state: AgentState) -> AgentState:
             "context": context,
         },
     )
-    total_msg_chars = sum(len(m["content"]) for m in messages)
-    logger.info(f"extraction_node messages: {len(messages)} messages, {total_msg_chars} total chars")
-
     try:
         raw = await client.complete(
             messages,
             model=PRIMARY_MODEL,
             response_format={"type": "json_object"},
         )
-        logger.info(f"extraction_node raw response ({len(raw)} chars): {raw[:500]!r}")
     except Exception as e:
         logger.error(f"extraction_node LLM call failed: {e}")
         state["_analysis_result"] = f"## Extracted {extraction_type.capitalize()}\n\nExtraction unavailable due to API error: {e}"
@@ -145,12 +146,30 @@ async def extraction_node(state: AgentState) -> AgentState:
 
     try:
         data = _parse_json_response(raw)
+        def _extract_items(obj: dict) -> tuple[list, str]:
+            """Find items list and summary from a parsed dict, handling nested wrappers."""
+            ITEM_KEYS = ("items", "risks", "entities", "decisions")
+            for k in ITEM_KEYS:
+                if obj.get(k):
+                    return obj[k], obj.get("summary") or ""
+            # One level deeper — model sometimes wraps in a narrative key
+            for v in obj.values():
+                if isinstance(v, dict):
+                    for k in ITEM_KEYS:
+                        if v.get(k):
+                            return v[k], v.get("summary") or ""
+            return [], obj.get("summary") or ""
+
         if isinstance(data, list):
-            items = data
-            summary = ""
+            # Unwrap if it's a list containing the actual data object
+            actual = next((x for x in data if isinstance(x, dict) and x), None)
+            if actual and not actual.get("name"):
+                items, summary = _extract_items(actual)
+            else:
+                items = data
+                summary = ""
         else:
-            items = data.get("items") or []
-            summary = data.get("summary") or ""
+            items, summary = _extract_items(data)
         # Guard: LLM sometimes nests the full JSON object inside the summary field
         if summary and isinstance(summary, str) and summary.strip().startswith(("{", "[")):
             try:
@@ -168,6 +187,14 @@ async def extraction_node(state: AgentState) -> AgentState:
         items = []
         summary = ""
         logger.warning("extraction_node: could not parse JSON from LLM response")
+
+    # Normalize alternative key names the model sometimes uses
+    for item in items:
+        if isinstance(item, dict) and not item.get("name"):
+            for alt in ("risk_name", "entity_name", "decision_name", "title", "risk", "entity"):
+                if item.get(alt):
+                    item["name"] = item.pop(alt)
+                    break
 
     # Fix 5a: filter null/empty/placeholder names
     items = [
