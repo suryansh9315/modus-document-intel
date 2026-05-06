@@ -115,7 +115,8 @@ async def aggregation_node(state: AgentState) -> AgentState:
     cluster_context_parts = []
     for cd in doc.cluster_digests:
         tokens = _count_tokens(cd.digest_text)
-        if budget_used + tokens < TOKEN_BUDGET * 0.4:  # max 40% for L2
+        l2_cap = 0.10 if query.query_type in EXTRACT_TYPES else 0.40
+        if budget_used + tokens < TOKEN_BUDGET * l2_cap:
             cluster_text = f"[Cluster {cd.cluster_index + 1}]\n{cd.digest_text}"
             # P2-2: append consolidated_metrics if available (populated after re-ingestion)
             if cd.consolidated_metrics:
